@@ -35,6 +35,13 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i)
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0]
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
+const formatDateLabel = (d: string) => {
+  const [y, m, day] = d.split('-').map(Number)
+  if (!y || !m || !day) return d
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  return `${day} ${months[m - 1]}`
+}
+
 function greeting(h: number) {
   if (h < 12) return 'Good morning'
   if (h < 18) return 'Good afternoon'
@@ -201,7 +208,7 @@ export default function Dashboard() {
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }} accessibilityLayer={false}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-                      <XAxis dataKey="date" tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
+                      <XAxis dataKey="date" tickFormatter={formatDateLabel} tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <Tooltip
                         contentStyle={TOOLTIP_STYLE}
@@ -239,7 +246,7 @@ export default function Dashboard() {
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }} accessibilityLayer={false}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
-                      <XAxis dataKey="date" tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
+                      <XAxis dataKey="date" tickFormatter={formatDateLabel} tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
                       <Tooltip
                         contentStyle={TOOLTIP_STYLE}

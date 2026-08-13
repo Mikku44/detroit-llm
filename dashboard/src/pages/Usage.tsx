@@ -27,6 +27,13 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i)
 const WEEKDAY_ORDER = [1, 2, 3, 4, 5, 6, 0]
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
+const formatDateLabel = (d: string) => {
+  const [y, m, day] = d.split('-').map(Number)
+  if (!y || !m || !day) return d
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+  return `${day} ${months[m - 1]}`
+}
+
 export default function Usage() {
   const [usage, setUsage] = useState<UsageRow[]>([])
   const [days, setDays] = useState(7)
@@ -215,7 +222,7 @@ export default function Usage() {
             <ResponsiveContainer width="100%" height="100%">
               {chart === 'bar' ? (
                 <BarChart data={chartData} accessibilityLayer={false}>
-                  <XAxis dataKey="date" tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <XAxis dataKey="date" tickFormatter={formatDateLabel} tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <Tooltip
                     contentStyle={TOOLTIP_STYLE}
@@ -232,7 +239,7 @@ export default function Usage() {
                       <stop offset="100%" stopColor={CHART_COLOR} stopOpacity={0.05} />
                     </linearGradient>
                   </defs>
-                  <XAxis dataKey="date" tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <XAxis dataKey="date" tickFormatter={formatDateLabel} tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
                   <Tooltip
                     contentStyle={TOOLTIP_STYLE}

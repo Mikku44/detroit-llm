@@ -4,7 +4,7 @@ import { useAuth } from '../lib/auth'
 import { api } from '../lib/api'
 import { useIsMobile } from '../hooks/use-mobile'
 import { LogOut, Key, BarChart3, LayoutDashboard, User, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard } from 'lucide-react'
-import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen } from 'react-icons/hi'
+import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat } from 'react-icons/hi'
 import { ChatHistoryProvider, useChatHistory } from '../lib/chat-history'
 import Avatar from './Avatar'
 import { Marker, MarkerContent } from './ui/marker'
@@ -43,6 +43,7 @@ import {
 
 const links = [
   { to: '/', label: 'Dashboard', icon: HiOutlineHome },
+  { to: '/chat', label: 'Chat', icon: HiOutlineChat },
   // { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/keys', label: 'API Keys', icon: HiOutlineKey },
   { to: '/usage', label: 'Usage', icon: HiOutlineChartBar },
