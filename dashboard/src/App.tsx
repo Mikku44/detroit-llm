@@ -29,7 +29,7 @@ export default function App() {
         <Route index element={<Dashboard />} />
         <Route path="keys" element={<Keys />} />
         <Route path="usage" element={<Usage />} />
-        {/* <Route path="chat" element={<Chat />} /> */}
+        <Route path="chat-assistant" element={<Chat />} />
         {/* <Route path="chatv2" element={<ChatV2 />} /> */}
         <Route path="chat" element={<Chat3 />} />
         <Route path="docs" element={<Docs />} />

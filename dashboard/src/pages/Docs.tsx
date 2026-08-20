@@ -198,17 +198,39 @@ client.DefaultRequestHeaders.Add("authorization", "Bearer " + Environment.GetEnv
 var res = await client.PostAsync("https://api.detroitllm.com/v1/chat/completions", body);
 Console.WriteLine(await res.Content.ReadAsStringAsync());`,
   cURL: `curl https://api.detroitllm.com/v1/chat/completions \\
-  -H "content-type: application/json" \\
-  -H "authorization: Bearer ${KEY_PLACEHOLDER}" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${KEY_PLACEHOLDER}" \\
   -d '{
     "model": "deepseek-v4-pro",
-    "max_tokens": 1024,
-    "messages": [{
-      "role": "user",
-      "content": "Hello, Detroit LLM"
-    }]
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "Hello!"}
+    ],
+    "reasoning": {"effort": "high"},
+    "output_config": {"effort": "high"},
+    "stream": false
   }'`,
 };
+
+const responsesCurl = `curl https://api.detroitllm.com/v1/responses \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${KEY_PLACEHOLDER}" \\
+  -d '{
+    "model": "deepseek-v4-flash",
+    "input": "What is the weather in Bangkok?",
+    "tools": [{
+      "type": "function",
+      "name": "get_weather",
+      "description": "Get current weather for a city",
+      "parameters": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"]
+      }
+    }],
+    "reasoning": {"effort": "none"},
+    "stream": false
+  }'`;
 
 function makeRenderer(apiKey: string | null) {
   return (props: any) => {
@@ -358,11 +380,60 @@ export default function Docs() {
       </div>
       </div>
 
+      {/* Responses API */}
+      <section className="max-w-6xl w-full mx-auto">
+        <h2 className="text-2xl font-serif font-normal text-zinc-50 mb-2">Responses API</h2>
+        <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">
+          The Responses API is our OpenAI-compatible agentic endpoint — built for tool-calling loops
+          (function calling, streaming deltas, and structured outputs) used by agent harnesses such as
+          the OpenAI Agents SDK and Gemini CLI. Point your harness at{' '}
+          <code className="font-mono text-xs text-zinc-300">https://api.detroitllm.com/v1</code>.
+        </p>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden">
+          <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">
+            <span className="font-mono text-xs text-zinc-400">POST /v1/responses</span>
+            <Button
+              onClick={() => navigator.clipboard.writeText(responsesCurl)}
+              variant="ghost"
+              size="sm"
+              className="text-zinc-500 hover:text-zinc-300 h-7 px-2 text-xs"
+            >
+              <FiCopy className="mr-1" /> Copy
+            </Button>
+          </div>
+          <div className="text-sm leading-relaxed bg-zinc-900 overflow-x-auto">
+            <SyntaxHighlighter language="bash" style={vscDarkPlus} customStyle={{ margin: 0, padding: '1.5rem', background: 'transparent', fontSize: '0.875rem', lineHeight: '1.625' }} codeTagProps={{ style: { fontFamily: 'inherit' } }}>
+              {responsesCurl}
+            </SyntaxHighlighter>
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+          {[
+            ['Function calling', 'Pass tools[] — the model returns function_call output items, then you feed results back via function_call_output items.'],
+            ['Streaming', 'set stream:true to receive SSE events: response.created, response.output_text.delta, response.completed.'],
+            ['Structured output', 'Force valid JSON with text:{"format":{"type":"json_schema","name":"...","schema":{...}}} or {"type":"json_object"}.'],
+            ['Multi-turn', 'Pass the full conversation history in input[] (stateless). previous_response_id is not supported by the upstream.'],
+            ['Reasoning', 'Control thinking with reasoning:{"effort":"low"|"high"|"max"|"none"}.'],
+          ].map(([title, desc]) => (
+            <div key={title} className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
+              <h4 className="text-sm font-medium text-zinc-200 mb-1">{title}</h4>
+              <p className="text-xs text-zinc-400 leading-relaxed">{desc}</p>
+            </div>
+          ))}
+        </div>
+        <p className="mt-4 text-xs text-zinc-500 max-w-2xl leading-relaxed">
+          Note: the Chat Completions endpoint supports JSON mode via <code className="font-mono">{'{ "type": "json_object" }'}</code>,
+          but schema-constrained output (<code className="font-mono">json_schema</code>) is only available on the Responses API.
+          Vision requests (image_url) are routed to Gemini automatically.
+        </p>
+      </section>
+
       {/* Explanation table */}
       <section className="max-w-6xl w-full mx-auto">
         <h2 className="text-2xl font-serif font-normal text-zinc-50 mb-4">API Reference</h2>
         <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">
           A quick reference for the Chat Completions endpoint, its parameters, and response fields.
+          For agentic workloads (tool calling, streaming loops) see the Responses API above.
         </p>
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden">
           <Table>
@@ -382,6 +453,8 @@ export default function Docs() {
                 ['temperature', 'number', 'No', 'Sampling temperature between 0 and 2. Defaults to 1.0.'],
                 ['top_p', 'number', 'No', 'Nucleus sampling probability. Defaults to 1.0.'],
                 ['stream', 'boolean', 'No', 'Stream partial deltas as they arrive. Defaults to false.'],
+                ['reasoning', 'object', 'No', 'Thinking control: {"effort": "low"|"high"|"max"} to enable reasoning, or {"effort": "none"} to disable it.'],
+                ['output_config', 'object', 'No', 'Output effort: {"effort": "low"|"high"|"max"}. Pairs with reasoning.'],
                 ['authorization', 'header', 'Yes', 'Your secret API key: "Bearer sk-dt-..." from the API Keys page.'],
               ].map((row) => (
                 <TableRow key={row[0]}>

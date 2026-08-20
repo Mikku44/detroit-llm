@@ -2,6 +2,12 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { fileURLToPath, URL } from 'node:url'
+import http from 'node:http'
+
+// Avoid reusing keep-alive sockets across uvicorn --reload restarts.
+// A pooled socket pointing at a dead worker causes `read ECONNRESET`
+// on the next proxied request (e.g. /api/conversations).
+const freshAgent = new http.Agent({ keepAlive: false, maxSockets: 64 })
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -13,11 +19,11 @@ export default defineConfig({
   },
   server: {
     proxy: {
-      '/auth': 'http://localhost:8000',
-      '/admin': 'http://localhost:8000',
-      '/api': 'http://localhost:8000',
-      '/v1': 'http://localhost:8000',
-      '/health': 'http://localhost:8000',
+      '/auth': { target: 'http://localhost:8000', agent: freshAgent },
+      '/admin': { target: 'http://localhost:8000', agent: freshAgent },
+      '/api': { target: 'http://localhost:8000', agent: freshAgent },
+      '/v1': { target: 'http://localhost:8000', agent: freshAgent },
+      '/health': { target: 'http://localhost:8000', agent: freshAgent },
     },
   },
 })

@@ -1,21 +1,115 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
-import { FiSend, FiPlus, FiCopy, FiCheck, FiPaperclip, FiThumbsUp, FiThumbsDown, FiChevronDown, FiZap, FiX } from 'react-icons/fi'
+import { Markdown } from '../components/Markdown'
+import { FiSend, FiPlus, FiCopy, FiCheck, FiPaperclip, FiThumbsUp, FiThumbsDown, FiChevronDown, FiZap, FiX, FiArrowRight, FiFileText, FiClock } from 'react-icons/fi'
+import { useChatHistory } from '../lib/chat-history'
+import IOSLoading from '../components/ios-loading'
+
+interface Cta {
+  label: string
+  href: string
+  external?: boolean
+}
+
+interface Attachment {
+  id: string
+  name: string
+  kind: 'image' | 'text'
+  dataUrl?: string
+  text?: string
+  size: number
+}
 
 interface Msg {
   role: 'user' | 'assistant'
   content: string
   reasoning?: string
+  error?: boolean
+  cta?: Cta
+  attachments?: Attachment[]
+  model?: string
+  durationMs?: number
+  finish_reason?: string | null
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+}
+
+interface SseMeta {
+  model?: string
+  finish_reason?: string | null
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+}
+
+interface ModelMeta {
+  name: string
+  desc: string
+  badges: string[]
+}
+
+const MODEL_META: Record<string, ModelMeta> = {
+  'deepseek-v4-pro': {
+    name: 'DeepSeek V4 Pro',
+    desc: 'Most capable — complex reasoning, coding & deep analysis',
+    badges: ['reasoning'],
+  },
+  'deepseek-v4-flash': {
+    name: 'DeepSeek V4 Flash',
+    desc: 'Fast & lightweight — for daily use and quick Q&A',
+    badges: ['fast'],
+  },
+  'gemini-2.5-flash': {
+    name: 'Gemini 2.5 Flash',
+    desc: 'Understands images & text',
+    badges: ['vision'],
+  },
+}
+
+const BADGE_STYLES: Record<string, string> = {
+  reasoning: 'font-bold bg-white text-indigo-700',
+  vision: 'font-bold bg-white text-emerald-700',
+  fast: 'font-bold bg-white text-sky-700',
+  default: 'font-bold bg-white text-zinc-700',
 }
 
 const SUGGESTIONS = [
-  'What is Detroit LLM?',
   'Explain the OpenAI-compatible API',
-  'How do I get an API key?',
   'Compare deepseek-v4-pro vs flash',
 ]
 
-function parseSse(buffer: string, onContent: (text: string) => void, onReasoning: (text: string) => void): string {
+// Rough per-model context window limits (tokens). Used for the usage progress bar.
+const MODEL_CONTEXT_LIMITS: Record<string, number> = {
+  'deepseek-v4-pro': 1000000,
+  'deepseek-v4-flash': 1000000,
+  'gemini-2.5-flash': 1000000,
+}
+
+const DEFAULT_CONTEXT_LIMIT = 1000000
+const COMPACT_THRESHOLD = 0.85 // auto-compact when usage >= 85%
+
+// Rough token estimate: ~4 chars per token (English-ish), images ~85 tokens.
+function estimateTextTokens(text: string): number {
+  if (!text) return 0
+  return Math.max(1, Math.round(text.length / 4))
+}
+
+function estimateMessageTokens(m: Msg): number {
+  let t = estimateTextTokens(m.content ?? '')
+  if (m.reasoning) t += estimateTextTokens(m.reasoning)
+  if (m.attachments) {
+    for (const a of m.attachments) {
+      if (a.kind === 'image') t += 85
+      else if (a.text) t += estimateTextTokens(a.text)
+    }
+  }
+  return t
+}
+
+function estimateMessagesTokens(msgs: Msg[]): number {
+  let total = 0
+  for (const m of msgs) total += estimateMessageTokens(m)
+  return total
+}
+
+function parseSse(buffer: string, onContent: (text: string) => void, onReasoning: (text: string) => void, onMeta: (meta: SseMeta) => void): string {
   const lines = buffer.split('\n')
   let last = lines.pop() ?? ''
   for (const line of lines) {
@@ -27,6 +121,18 @@ function parseSse(buffer: string, onContent: (text: string) => void, onReasoning
       const delta = json?.choices?.[0]?.delta || {}
       if (typeof delta.content === 'string' && delta.content) onContent(delta.content)
       if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) onReasoning(delta.reasoning_content)
+      const meta: SseMeta = {}
+      if (typeof json?.model === 'string' && json.model) meta.model = json.model
+      const finish = json?.choices?.[0]?.finish_reason
+      if (finish != null) meta.finish_reason = finish
+      if (json?.usage && typeof json.usage.prompt_tokens === 'number') {
+        meta.usage = {
+          prompt_tokens: json.usage.prompt_tokens,
+          completion_tokens: typeof json.usage.completion_tokens === 'number' ? json.usage.completion_tokens : 0,
+          total_tokens: typeof json.usage.total_tokens === 'number' ? json.usage.total_tokens : 0,
+        }
+      }
+      if (meta.model || meta.usage || meta.finish_reason != null) onMeta(meta)
     } catch {
       /* partial json across chunks, keep for next round */
       last = `${line}\n${last}`
@@ -35,38 +141,242 @@ function parseSse(buffer: string, onContent: (text: string) => void, onReasoning
   return last
 }
 
+function friendlyError(res: Response, raw: string, membersUrl: string): { content: string; cta?: Cta } {
+  if (res.status === 401) {
+    return {
+      content: 'Your API key is invalid or has expired.',
+      cta: { label: 'Create a new API key', href: '/keys' },
+    }
+  }
+  if (res.status === 403) {
+    return {
+      content: 'Your account does not have access yet.',
+      cta: { label: 'Become a member', href: membersUrl || '#', external: true },
+    }
+  }
+  if (res.status === 429) {
+    return { content: 'Too many requests. Please wait a minute and try again.' }
+  }
+  try {
+    const json = JSON.parse(raw)
+    if (json && typeof json.detail === 'string' && json.detail) return { content: json.detail }
+  } catch {
+    /* fall through to raw */
+  }
+  return { content: raw || `Something went wrong (error ${res.status}). Please try again.` }
+}
+
+type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
+
+function isTruncated(m: Msg): boolean {
+  if (!m.content) return false
+  if (m.finish_reason === 'length') return true
+  if ((m.content.match(/```/g) || []).length % 2 === 1) return true
+  const text = m.content.trimEnd()
+  if (!text) return false
+  // Hanging sentence/list connectors left open by a cut-off generation.
+  if (/[,;:…–—-]$/.test(text)) return true
+  // Dangling inline-markdown run (unclosed emphasis/inline code) at the end.
+  const tail = text.split('\n').pop() ?? ''
+  const ticks = (tail.match(/`/g) || []).length
+  if (ticks % 2 === 1) return true
+  return false
+}
+
+const TEXT_FILE_EXT = /\.(txt|md|markdown|csv|json|log|py|ts|tsx|js|jsx|html|css|scss|yaml|yml|xml|sh|bash|sql|go|java|rb|php)$/i
+const MAX_TEXT_FILE_BYTES = 100 * 1024
+const IMAGE_MAX_DIM = 1280
+const IMAGE_QUALITY = 0.85
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(typeof r.result === 'string' ? r.result : '')
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(file)
+  })
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(typeof r.result === 'string' ? r.result : '')
+    r.onerror = () => reject(r.error)
+    r.readAsText(file)
+  })
+}
+
+async function downscaleImage(file: File): Promise<string> {
+  const dataUrl = await readFileAsDataUrl(file)
+  const img = new Image()
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve()
+    img.onerror = () => reject(new Error('Could not read this image.'))
+    img.src = dataUrl
+  })
+  const scale = Math.min(1, IMAGE_MAX_DIM / Math.max(img.width, img.height))
+  const w = Math.max(1, Math.round(img.width * scale))
+  const h = Math.max(1, Math.round(img.height * scale))
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Canvas is not supported in this browser.')
+  ctx.drawImage(img, 0, 0, w, h)
+  return canvas.toDataURL('image/jpeg', IMAGE_QUALITY)
+}
+
+async function processFile(file: File): Promise<Attachment> {
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  if (file.type.startsWith('image/')) {
+    const dataUrl = await downscaleImage(file)
+    return { id, name: file.name, kind: 'image', dataUrl, size: file.size }
+  }
+  if (!TEXT_FILE_EXT.test(file.name)) {
+    throw new Error(`Unsupported file type: ${file.name}. Attach an image or a text file (txt/md/csv/json/log/code).`)
+  }
+  if (file.size > MAX_TEXT_FILE_BYTES) {
+    throw new Error(`${file.name} is too large to attach as text (max 100KB).`)
+  }
+  const text = await readFileAsText(file)
+  return { id, name: file.name, kind: 'text', text, size: file.size }
+}
+
+function buildContent(text: string, attachments: Attachment[]): string | ContentPart[] {
+  if (!attachments.length) return text
+  const parts: ContentPart[] = []
+  if (text.trim()) parts.push({ type: 'text', text })
+  for (const a of attachments) {
+    if (a.kind === 'image' && a.dataUrl) {
+      parts.push({ type: 'image_url', image_url: { url: a.dataUrl } })
+    } else if (a.kind === 'text' && a.text != null) {
+      parts.push({ type: 'text', text: `[Attached file: ${a.name}]\n\n${a.text}` })
+    }
+  }
+  return parts
+}
+
+function AttachmentPreview({ attachment, onRemove }: { attachment: Attachment; onRemove: () => void }) {
+  return (
+    <div className="relative">
+      {attachment.kind === 'image' && attachment.dataUrl ? (
+        <img src={attachment.dataUrl} alt={attachment.name} className="h-16 w-16 rounded-lg border border-zinc-700 object-cover" />
+      ) : (
+        <span className="flex max-w-44 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300">
+          <FiFileText size={13} />
+          <span className="truncate">{attachment.name}</span>
+        </span>
+      )}
+      <button
+        onClick={onRemove}
+        className="absolute -right-1.5 -top-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-zinc-700 text-zinc-200 transition-colors hover:bg-red-600 hover:text-white"
+        title="Remove attachment"
+      >
+        <FiX size={12} strokeWidth={3} />
+      </button>
+    </div>
+  )
+}
+
 export default function Chat3() {
   const [messages, setMessages] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
-  const [apiKey, setApiKey] = useState<string | null>(null)
+  const [sessionToken, setSessionToken] = useState<string | null>(null)
+  const [membersUrl, setMembersUrl] = useState('')
   const [copied, setCopied] = useState<string | null>(null)
-  const [model, setModel] = useState('deepseek-v4-pro')
-  const [models, setModels] = useState<string[]>(['deepseek-v4-pro', 'deepseek-v4-flash'])
+  const [model, setModel] = useState('')
+  const [models, setModels] = useState<string[]>([])
   const [modelOpen, setModelOpen] = useState(false)
   const [thinking, setThinking] = useState(false)
-  const [effort, setEffort] = useState<'low' | 'medium' | 'high'>('medium')
+  const [effort, setEffort] = useState<'low' | 'high' | 'max'>('high')
+  const [pending, setPending] = useState<Attachment[]>([])
+  const [attaching, setAttaching] = useState(false)
+  const [attachError, setAttachError] = useState<string | null>(null)
+  const [isVision, setIsVision] = useState(false)
+  const [compacting, setCompacting] = useState(false)
+  const [historyLoaded, setHistoryLoaded] = useState(false)
+  const { conversations, activeId, setActiveId, save: saveConversation, getMessages } = useChatHistory()
+  const convSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const modelRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   useEffect(() => {
-    api
-      .listKeys()
-      .then((d) => {
-        const keys = (d.keys || []) as Array<{ key: string; is_active: boolean }>
-        const active = keys.find((k) => k.is_active) || keys[0]
-        if (active?.key) setApiKey(active.key)
-      })
-      .catch(() => {})
+    setSessionToken(localStorage.getItem('session_token'))
   }, [])
+
+  useEffect(() => {
+    api.health().then((h) => setMembersUrl((h as { members_url?: string }).members_url || '')).catch(() => {})
+  }, [])
+
+  // If no conversation is active yet, load the most recent saved one for this user.
+  useEffect(() => {
+    if (activeId) {
+      setHistoryLoaded(true)
+      return
+    }
+    if (conversations.length === 0) {
+      setHistoryLoaded(true)
+      return
+    }
+    const latest = conversations[0]
+    getMessages(latest.id)
+      .then((msgs) => {
+        if (msgs.length) setMessages(msgs)
+        setActiveId(latest.id)
+        setHistoryLoaded(true)
+      })
+      .catch(() => setHistoryLoaded(true))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [conversations])
+
+  // Load messages whenever the active conversation changes (via the layout sidebar).
+  useEffect(() => {
+    if (!activeId) {
+      setMessages([])
+      setHistoryLoaded(true)
+      return
+    }
+    let cancelled = false
+    getMessages(activeId)
+      .then((msgs) => {
+        if (cancelled) return
+        setMessages(msgs)
+        setHistoryLoaded(true)
+      })
+      .catch(() => setHistoryLoaded(true))
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeId])
+
+  // Debounced save of the current conversation through the shared chat history context.
+  useEffect(() => {
+    if (!historyLoaded || busy || messages.length === 0) return
+    if (convSaveTimer.current) clearTimeout(convSaveTimer.current)
+    convSaveTimer.current = setTimeout(async () => {
+      await saveConversation(activeId, messages, model || undefined)
+    }, 1200)
+    return () => {
+      if (convSaveTimer.current) clearTimeout(convSaveTimer.current)
+    }
+  }, [messages, busy, historyLoaded, model, activeId, saveConversation])
 
   useEffect(() => {
     fetch('/v1/models')
       .then((r) => r.json())
       .then((d) => {
-        const list = (d?.data || []).map((m: { id: string }) => m.id)
-        if (list.length) setModels(list)
+        const list = (d?.data || [])
+          .map((m: { id: string }) => m.id)
+          .filter((id: string) => /deepseek/i.test(id))
+        if (list.length) {
+          setModels(list)
+          setModel((cur) => cur || list.find((id: string) => id.includes('flash')) || list[0])
+        }
       })
       .catch(() => {})
   }, [])
@@ -90,49 +400,144 @@ export default function Chat3() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, busy])
 
+  useEffect(() => {
+    resizeTextarea()
+  }, [input])
+
+  const addFiles = async (files: File[]) => {
+    if (!files.length) return
+    setAttaching(true)
+    setAttachError(null)
+    const added: Attachment[] = []
+    for (const f of files) {
+      try {
+        added.push(await processFile(f))
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'Failed to attach file.'
+        setAttachError(msg)
+        window.setTimeout(() => setAttachError(null), 5000)
+      }
+    }
+    if (added.length) setPending((p) => [...p, ...added])
+    setAttaching(false)
+  }
+
+  const onPickFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    await addFiles(files)
+  }
+
+  const [dragOver, setDragOver] = useState(false)
+  const onDropFiles = async (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    await addFiles(Array.from(e.dataTransfer.files ?? []))
+  }
+
+  const removeAttachment = (id: string) => {
+    setPending((p) => p.filter((a) => a.id !== id))
+  }
+
+  const resizeTextarea = () => {
+    const el = textareaRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    const maxH = Math.round(window.innerHeight * 0.4)
+    el.style.maxHeight = `${maxH}px`
+    el.style.height = `${Math.min(el.scrollHeight, maxH)}px`
+  }
+
   const send = async (textOverride?: string) => {
     const text = (textOverride ?? input).trim()
-    if (!text || busy) return
-    if (!apiKey) {
+    const attachments = [...pending]
+    if ((!text && attachments.length === 0) || busy) return
+    if (nearLimit && messages.length >= 3) {
+      // Auto-compact before the next message to keep the conversation within the context window.
       setMessages((m) => [
         ...m,
-        { role: 'assistant', content: '[Error] No API key found. Create one on the API Keys page first.' },
+        { role: 'user', content: 'Compacting conversation to fit the context window…', model },
+      ])
+      setBusy(true)
+      const ok = await compactChat()
+      setBusy(false)
+      if (!ok) return
+    }
+    if (!sessionToken) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: 'assistant',
+          content: 'You are not logged in. Log in to start chatting.',
+          error: true,
+          cta: { label: 'Log in', href: '/login' },
+        },
+      ])
+      return
+    }
+    if (!model) {
+      setMessages((m) => [
+        ...m,
+        {
+          role: 'assistant',
+          content: 'No model is available right now. Please try again later.',
+          error: true,
+        },
       ])
       return
     }
     setInput('')
-    setMessages((m) => [...m, { role: 'user', content: text }])
+    setPending([])
+    const hasImage = attachments.some((a) => a.kind === 'image')
+    const upstreamModel = hasImage ? 'gemini-2.5-flash' : model
+    setMessages((m) => [...m, { role: 'user', content: text, attachments, model }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
     setBusy(true)
+    setIsVision(hasImage)
 
     const history = messages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({ role: m.role, content: m.content }))
+      .map((m) => ({
+        role: m.role,
+        content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
+      }))
     const body: Record<string, unknown> = {
       model,
       max_tokens: 1024,
       stream: true,
-      messages: [...history, { role: 'user', content: text }],
+      messages: [...history, { role: 'user', content: buildContent(text, attachments) }],
     }
-    if (thinking) {
-      body['thinking'] = { type: 'enabled' }
-      body['reasoning_effort'] = effort
-    } else {
-      body['thinking'] = { type: 'disabled' }
+    if (!hasImage) {
+      if (thinking) {
+        body['reasoning'] = { effort }
+        body['output_config'] = { effort }
+      } else {
+        body['reasoning'] = { effort: 'none' }
+      }
     }
 
     const controller = new AbortController()
     abortRef.current = controller
 
     try {
-      const res = await fetch('/v1/chat/completions', {
+      const res = await fetch('/api/web/chat/completions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
         body: JSON.stringify(body),
         signal: controller.signal,
       })
       if (!res.ok || !res.body) {
         const detail = await res.text().catch(() => `HTTP ${res.status}`)
-        setMessages((m) => [...m, { role: 'assistant', content: `[Error] ${detail}` }])
+        const err = friendlyError(res, detail, membersUrl)
+        setMessages((m) => {
+          const copy = [...m]
+          const idx = copy.length - 1
+          if (copy[idx]?.role === 'assistant') {
+            copy[idx] = { ...copy[idx], content: err.content, error: true, cta: err.cta }
+          } else {
+            copy.push({ role: 'assistant', content: err.content, error: true, cta: err.cta })
+          }
+          return copy
+        })
         setBusy(false)
         return
       }
@@ -141,8 +546,10 @@ export default function Chat3() {
       const decoder = new TextDecoder()
       let buffer = ''
       let logAcc = ''
-
-      setMessages((m) => [...m, { role: 'assistant', content: '', reasoning: '' }])
+      const startedAt = performance.now()
+      let respModel = ''
+      let finishReason: string | null | undefined
+      let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined
 
       const appendToLast = (key: 'content' | 'reasoning', text: string) => {
         setMessages((m) => {
@@ -150,6 +557,24 @@ export default function Chat3() {
           const idx = copy.length - 1
           if (copy[idx]?.role === 'assistant') {
             copy[idx] = { ...copy[idx], [key]: (copy[idx][key] ?? '') + text }
+          }
+          return copy
+        })
+      }
+
+      const patchLastMeta = () => {
+        const durationMs = Math.round(performance.now() - startedAt)
+        setMessages((m) => {
+          const copy = [...m]
+          const idx = copy.length - 1
+          if (copy[idx]?.role === 'assistant') {
+            copy[idx] = {
+              ...copy[idx],
+              durationMs,
+              model: respModel || copy[idx].model,
+              finish_reason: finishReason,
+              usage: usage || copy[idx].usage,
+            }
           }
           return copy
         })
@@ -167,16 +592,40 @@ export default function Chat3() {
             logAcc += c
             appendToLast('content', c)
           },
-          (r) => appendToLast('reasoning', r),
+          (r) => {
+            if (thinking) appendToLast('reasoning', r)
+          },
+          (meta) => {
+            if (meta.model) respModel = meta.model
+            if (meta.finish_reason != null) finishReason = meta.finish_reason
+            if (meta.usage) usage = meta.usage
+          },
         )
       }
       console.log('[Chat3 response]', logAcc)
+      patchLastMeta()
     } catch (e) {
-      if (!(e instanceof DOMException && e.name === 'AbortError')) {
-        setMessages((m) => [...m, { role: 'assistant', content: `[Error] ${e instanceof Error ? e.message : String(e)}` }])
-      }
+      const aborted = e instanceof DOMException && e.name === 'AbortError'
+      setMessages((m) => {
+        const copy = [...m]
+        const idx = copy.length - 1
+        const patchLast = (content: string, error = false) => {
+          if (copy[idx]?.role === 'assistant') {
+            copy[idx] = { ...copy[idx], content, error }
+          } else {
+            copy.push({ role: 'assistant', content, error })
+          }
+        }
+        if (aborted) {
+          if (!copy[idx]?.content) patchLast('Stopped.')
+        } else {
+          patchLast(`Something went wrong. Please try again. (${e instanceof Error ? e.message : String(e)})`, true)
+        }
+        return copy
+      })
     } finally {
       setBusy(false)
+      setIsVision(false)
       abortRef.current = null
     }
   }
@@ -192,6 +641,45 @@ export default function Chat3() {
   const clearChat = () => {
     stop()
     setMessages([])
+    setActiveId(null)
+    setHistoryLoaded(true)
+  }
+
+  const contextLimit = MODEL_CONTEXT_LIMITS[model] ?? DEFAULT_CONTEXT_LIMIT
+  const usedTokens = estimateMessagesTokens(messages)
+  const usageRatio = contextLimit > 0 ? usedTokens / contextLimit : 0
+  const nearLimit = usageRatio >= COMPACT_THRESHOLD
+
+  const compactChat = async (): Promise<boolean> => {
+    if (compacting || busy) return false
+    if (messages.length < 3) return false
+    setCompacting(true)
+    try {
+      const history = messages
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .map((m) => ({
+          role: m.role,
+          content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
+        }))
+      const res = await fetch('/api/web/chat/compact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify({ model, messages: history }),
+      })
+      if (!res.ok) return false
+      const data = await res.json()
+      const summary = (data?.summary ?? '').trim()
+      if (!summary) return false
+      // Replace the whole history with a system summary + the last user turn.
+      setMessages([
+        { role: 'user', content: `[Summary of earlier conversation]\n\n${summary}`, model },
+      ])
+      return true
+    } catch {
+      return false
+    } finally {
+      setCompacting(false)
+    }
   }
 
   const isEmpty = messages.length === 0
@@ -213,27 +701,50 @@ export default function Chat3() {
             className="flex h-9 items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors"
           >
             <span className="size-2 rounded-full bg-(--primary-color)" />
-            {model}
+            <span className="truncate font-medium">{MODEL_META[model]?.name ?? model}</span>
             <FiChevronDown size={14} className={`transition-transform ${modelOpen ? 'rotate-180' : ''}`} />
           </button>
           {modelOpen && (
-            <div className="absolute right-0 top-full z-50 mt-2 w-64 overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 py-1.5 shadow-xl">
-              {models.map((m) => (
-                <button
-                  key={m}
-                  onClick={() => {
-                    setModel(m)
-                    setModelOpen(false)
-                  }}
-                  className={`flex w-full items-center gap-2 px-4 py-2.5 text-left text-sm transition-colors hover:bg-zinc-800 ${
-                    m === model ? 'text-zinc-100' : 'text-zinc-400'
-                  }`}
-                >
-                  <span className="size-2 shrink-0 rounded-full bg-(--primary-color)" />
-                  <span className="truncate font-mono text-xs">{m}</span>
-                  {m === model && <FiCheck size={14} className="ml-auto text-(--primary-color)" />}
-                </button>
-              ))}
+            <div className="absolute right-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 py-1.5 shadow-xl">
+              <div className="max-h-100 overflow-y-auto">
+              {models.map((m) => {
+                const meta = MODEL_META[m]
+                return (
+                  <button
+                    key={m}
+                    onClick={() => {
+                      setModel(m)
+                      setModelOpen(false)
+                    }}
+                    className={`flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors hover:bg-zinc-800 ${
+                      m === model ? 'text-zinc-100' : 'text-zinc-400'
+                    }`}
+                  >
+                    <span className="mt-1.5 size-2 shrink-0 rounded-full bg-(--primary-color)" />
+                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                      <span className="flex items-center gap-1.5">
+                        <span className="truncate text-sm font-medium">
+                          {meta?.name ?? m}
+                        </span>
+                        {meta?.badges.map((b) => (
+                          <span
+                            key={b}
+                            className={`rounded-full border px-1.5 py-px text-[10px]  uppercase tracking-wide ${
+                              BADGE_STYLES[b] ?? BADGE_STYLES.default
+                            }`}
+                          >
+                            {b}
+                          </span>
+                        ))}
+                      </span>
+                      <span className="line-clamp-3 text-xs text-zinc-500">{meta?.desc}</span>
+                      <span className="truncate font-mono text-[10px] text-zinc-600">{m}</span>
+                    </span>
+                    {m === model && <FiCheck size={14} className="mt-1 text-(--primary-color)" />}
+                  </button>
+                )
+              })}
+              </div>
             </div>
           )}
         </div>
@@ -275,11 +786,32 @@ export default function Chat3() {
                 </div>
                 <div className={`min-w-0 flex-1 ${m.role === 'user' ? 'text-right' : ''}`}>
                   {m.role === 'assistant' ? (
-                    <div className="mb-1 text-sm font-medium text-zinc-300">Detroit LLM</div>
+                    <div className="mb-1 flex items-center gap-2 text-sm font-medium text-zinc-300">
+                      Detroit LLM
+                      {m.model && m.model !== model && (
+                        <span className="rounded-full border border-zinc-800 bg-zinc-900 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                          {MODEL_META[m.model]?.name ?? m.model}
+                        </span>
+                      )}
+                    </div>
                   ) : (
                     <div className="mb-1 text-sm font-medium text-zinc-400">You</div>
                   )}
-                  {m.role === 'assistant' && m.reasoning && (
+                  {m.role === 'user' && m.attachments && m.attachments.length > 0 && (
+                    <div className="mb-2 flex flex-wrap justify-end gap-2">
+                      {m.attachments.map((a) =>
+                        a.kind === 'image' && a.dataUrl ? (
+                          <img key={a.id} src={a.dataUrl} alt={a.name} className="h-20 w-20 rounded-lg border border-zinc-700 object-cover" />
+                        ) : a.kind === 'text' ? (
+                          <span key={a.id} className="flex max-w-44 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300">
+                            <FiFileText size={13} />
+                            <span className="truncate">{a.name}</span>
+                          </span>
+                        ) : null
+                      )}
+                    </div>
+                  )}
+                  {m.role === 'assistant' && m.reasoning && thinking && (
                     <div className="mb-2 rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2.5">
                       <div className="flex items-center gap-2 mb-1.5 text-[11px] font-medium uppercase tracking-wide text-zinc-500">
                         <FiZap size={12} className="text-(--primary-color)" />
@@ -290,15 +822,63 @@ export default function Chat3() {
                       </div>
                     </div>
                   )}
-                  <div className="whitespace-pre-wrap break-words text-[15px] leading-7 text-zinc-200">
-                    {m.content || (busy && i === messages.length - 1 ? (
-                      <span className="inline-flex items-center gap-1.5 text-zinc-500">
-                        <span className="inline-block size-2 rounded-full bg-zinc-500 animate-pulse" />
-                        {thinking ? 'Reasoning…' : 'Thinking…'}
-                      </span>
-                    ) : null)}
-                  </div>
-                  {m.role === 'assistant' && m.content && (
+                  {m.error ? (
+                    <div className="rounded-xl border border-red-900/60 bg-red-950/40 px-4 py-3">
+                      <div className="flex items-start gap-2.5">
+                        <div className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-red-600/80 text-white">
+                          <FiX size={12} strokeWidth={3} />
+                        </div>
+                        <div>
+                          <div className="text-sm font-medium text-red-300">Something went wrong</div>
+                          <div className="mt-1 whitespace-pre-wrap break-words text-[13px] leading-6 text-red-200/80">
+                            {m.content}
+                            {m.cta && (
+                              <>
+                                {' '}
+                                <a
+                                  href={m.cta.href}
+                                  {...(m.cta.external ? { target: '_blank', rel: 'noreferrer' } : {})}
+                                  className="inline-flex items-center gap-1 font-semibold text-(--primary-color) underline underline-offset-4 transition-colors hover:text-red-100"
+                                >
+                                  {m.cta.label}
+                                  <FiArrowRight size={13} />
+                                </a>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="min-w-0 break-words text-[15px] leading-7 text-zinc-200">
+                      {m.content ? (
+                        m.role === 'assistant' ? (
+                          <Markdown>{m.content}</Markdown>
+                        ) : (
+                          <div className="whitespace-pre-wrap">{m.content}</div>
+                        )
+                      ) : busy && i === messages.length - 1 ? (
+                        <div className="flex items-center gap-3">
+                          <IOSLoading size={24} />
+                          <span className="text-[13px] text-zinc-400">
+                            {isVision ? 'Looking at the image…' : thinking ? 'Reasoning…' : 'Generating…'}
+                          </span>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
+                  {m.role === 'user' && m.content && (
+                    <div className="mt-2 flex items-center justify-end">
+                      <button
+                        onClick={() => copyMsg(m.content)}
+                        className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
+                        title="Copy"
+                      >
+                        {copied === m.content ? <FiCheck className="text-green-500" /> : <FiCopy size={15} />}
+                      </button>
+                    </div>
+                  )}
+                  {m.role === 'assistant' && m.content && !m.error && (
                     <div className="mt-2 flex items-center gap-0.5">
                       <button
                         onClick={() => copyMsg(m.content)}
@@ -321,6 +901,39 @@ export default function Chat3() {
                       </button>
                     </div>
                   )}
+                  {m.role === 'assistant' && isTruncated(m) && !busy && (
+                    <button
+                      onClick={() => send('continue')}
+                      className="mt-2 flex items-center gap-1.5 border hover:border-zinc-100/20
+                      border-zinc-800 bg-zinc-800 text-zinc-300 text-[12px] font-medium 
+                      px-4 py-1.5 rounded-full transition-colors"
+                    >
+                      <FiArrowRight size={13} />
+                      Continue
+                    </button>
+                  )}
+                  {m.role === 'assistant' && (m.durationMs != null || m.usage || m.model) && !m.error && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] tabular-nums text-zinc-500">
+                      {m.durationMs != null && (
+                        <span className="flex items-center gap-1">
+                          <FiClock size={10} />
+                          {(m.durationMs / 1000).toFixed(1)}s
+                        </span>
+                      )}
+                      {m.usage && (
+                        <span className="flex items-center gap-1">
+                          <span>↑{m.usage.prompt_tokens.toLocaleString()}</span>
+                          <span>↓{m.usage.completion_tokens.toLocaleString()}</span>
+                          <span>= {m.usage.total_tokens.toLocaleString()} tok</span>
+                        </span>
+                      )}
+                      {m.model && (
+                        <span className="rounded-full border border-zinc-800 bg-zinc-900 px-1.5 py-px font-medium uppercase tracking-wide">
+                          {MODEL_META[m.model]?.name ?? m.model}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -330,48 +943,117 @@ export default function Chat3() {
       </div>
 
       {/* Composer */}
-      <div className="mx-auto w-full max-w-3xl px-4 pb-6 pt-2 shrink-0">
-        <div className="flex items-end gap-2 rounded-[26px] border border-zinc-700 bg-zinc-900 px-3 py-2 shadow-[0_4px_20px_rgba(0,0,0,0.4)] focus-within:border-zinc-500 transition-colors">
-          <button
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
-            title="Attach"
-            onClick={() => {}}
-          >
-            <FiPaperclip size={18} />
-          </button>
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                send()
-              }
-            }}
-            rows={1}
-            placeholder="Ask anything"
-            className="max-h-40 flex-1 resize-none bg-transparent py-2 text-[15px] text-zinc-100 outline-none placeholder:text-zinc-500"
-          />
-          {busy ? (
-            <button
-              onClick={stop}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-black hover:bg-white transition-colors"
-              title="Stop generating"
-            >
-              <div className="size-3 rounded-[3px] bg-current" />
-            </button>
-          ) : (
-            <button
-              onClick={() => send()}
-              disabled={!input.trim()}
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) transition-opacity hover:opacity-90 disabled:opacity-30 disabled:hover:opacity-30"
-              title="Send message"
-            >
-              <FiSend size={15} className="-mr-0.5" />
-            </button>
+      <div className="mx-auto w-full max-w-3xl px-4 pb-0 pt-2 shrink-0">
+        <div
+          className={`rounded-[26px]  bg-zinc-900 shadow-[0_4px_20px_rgba(0,0,0,0.4)] transition-colors ${
+            dragOver ? 'border-(--primary-color) ring-2 ring-(--primary-color)/30' : 'border-zinc-700 focus-within:border-zinc-500'
+          }`}
+          onDragEnter={(e) => {
+            e.preventDefault()
+            if (e.dataTransfer.types.includes('Files')) setDragOver(true)
+          }}
+          onDragOver={(e) => {
+            e.preventDefault()
+            if (e.dataTransfer.types.includes('Files')) setDragOver(true)
+          }}
+          onDragLeave={(e) => {
+            e.preventDefault()
+            if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false)
+          }}
+          onDrop={onDropFiles}
+        >
+          {dragOver && (
+            <div className="flex items-center justify-center gap-2 py-3 text-[13px] text-(--primary-color)">
+              <FiPaperclip size={15} />
+              Drop files to attach
+            </div>
           )}
+          {!dragOver && pending.length > 0 && (
+            <div className="flex flex-wrap gap-2 px-3 pt-3">
+              {pending.map((a) => (
+                <AttachmentPreview key={a.id} attachment={a} onRemove={() => removeAttachment(a.id)} />
+              ))}
+            </div>
+          )}
+          <div className="flex items-end gap-2 px-3 py-2">
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept="image/*,.txt,.md,.csv,.json,.log,.py,.ts,.tsx,.js,.jsx,.html,.css,.yaml,.yml,.xml,.sh,.sql,.go,.java,.rb,.php"
+              className="hidden"
+              onChange={onPickFiles}
+            />
+            <button
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors disabled:opacity-40"
+              title="Attach a file"
+              disabled={busy || attaching}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <FiPaperclip size={18} />
+            </button>
+            <textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  send()
+                }
+              }}
+              rows={1}
+              placeholder="Ask anything"
+              className="flex-1 resize-none bg-transparent py-2 text-[15px] text-zinc-100 outline-none placeholder:text-zinc-500"
+              style={{ maxHeight: `${Math.round(window.innerHeight * 0.4)}px` }}
+            />
+            {busy ? (
+              <button
+                onClick={stop}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-black hover:bg-white transition-colors"
+                title="Stop generating"
+              >
+                <div className="size-3 rounded-[3px] bg-current" />
+              </button>
+            ) : (
+              <button
+                onClick={() => send()}
+                disabled={(!input.trim() && pending.length === 0) || attaching}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) transition-opacity hover:opacity-90 disabled:opacity-30 disabled:hover:opacity-30"
+                title="Send message"
+              >
+                <FiSend size={15} className="-mr-0.5" />
+              </button>
+            )}
+          </div>
         </div>
+        {attachError && <p className="mt-1 text-center text-xs text-red-400">{attachError}</p>}
         <div className="mt-2 flex items-center justify-center gap-2">
+          <button
+            onClick={compactChat}
+            className="group relative flex h-8 w-8 items-center justify-center rounded-full transition-transform hover:scale-105"
+            title={nearLimit ? 'Context nearly full — click to compact' : `Context ${Math.round(usageRatio * 100)}% used — click to compact`}
+          >
+            <svg width="32" height="32" viewBox="0 0 32 32" className="-rotate-90">
+              <circle cx="16" cy="16" r="13" fill="none" strokeWidth="4" className="stroke-zinc-800" />
+              <circle
+                cx="16"
+                cy="16"
+                r="13"
+                fill="none"
+                strokeWidth="4"
+                strokeLinecap="round"
+                strokeDasharray={2 * Math.PI * 13}
+                strokeDashoffset={2 * Math.PI * 13 * (1 - Math.min(1, usageRatio))}
+                className={`transition-all duration-300 ${
+                  nearLimit ? 'stroke-red-500' : usageRatio > 0.6 ? 'stroke-amber-500' : 'stroke-(--primary-color)'
+                }`}
+              />
+            </svg>
+            <span className="pointer-events-none absolute text-[9px] font-medium tabular-nums text-zinc-400">
+              {Math.round(usageRatio * 100)}%
+            </span>
+          </button>
           <button
             onClick={() => setThinking((t) => !t)}
             className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors ${
@@ -385,7 +1067,7 @@ export default function Chat3() {
             {thinking ? 'Thinking On' : 'Thinking Off'}
           </button>
           <div className="flex items-center gap-0.5 rounded-full border border-zinc-800 bg-zinc-900/50 p-0.5">
-            {(['low', 'medium', 'high'] as const).map((e) => (
+            {(['low', 'high', 'max'] as const).map((e) => (
               <button
                 key={e}
                 onClick={() => setEffort(e)}
@@ -405,7 +1087,7 @@ export default function Chat3() {
         <p className="mt-2 text-center text-xs text-zinc-600">
           Model can make mistakes. Check important info.
         </p>
-      </div>
+    </div>
     </div>
   )
 }

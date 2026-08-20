@@ -15,6 +15,7 @@
     "utils": "@/lib/utils"
   },
   "registries": {
-    "@assistant-ui": "https://r.assistant-ui.com/{name}.json"
+    "@assistant-ui": "https://r.assistant-ui.com/{name}.json",
+    "@aceternity": "https://ui.aceternity.com/registry/{name}.json"
   }
 }

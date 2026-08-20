@@ -18,10 +18,15 @@ async def require_api_key(
     request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> str:
+    # Anthropic SDKs/clients send the key as `x-api-key`; OpenAI-style clients send `Authorization: Bearer`.
     auth_header = request.headers.get("Authorization", "")
-    if not auth_header.startswith("Bearer "):
+    raw_key = ""
+    if auth_header.startswith("Bearer "):
+        raw_key = auth_header.removeprefix("Bearer ").strip()
+    else:
+        raw_key = (request.headers.get("x-api-key") or "").strip()
+    if not raw_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    raw_key = auth_header.removeprefix("Bearer ").strip()
     prefix = extract_key_prefix(raw_key)
     if not prefix:
         raise HTTPException(status_code=401, detail="Invalid API key format")

@@ -152,6 +152,11 @@ main,
   animation: fade458 1s linear infinite;
 }
 
+.wrapper {
+  max-width: 100vh;
+  overflow: hidden;
+}
+
 @keyframes fade458 {
   from {
     opacity: 1;

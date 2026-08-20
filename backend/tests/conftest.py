@@ -11,6 +11,14 @@ os.environ["JWT_SECRET"] = "test-jwt-secret-1234567890-abcdefghijklmnopqrstuvwxy
 os.environ["RATE_LIMIT_PER_MINUTE"] = "3600"
 os.environ["DEEPSEEK_API_KEY"] = ""
 os.environ["GEMINI_API_KEY"] = ""
+# Hermetic tests: never hit external image providers (Unsplash/loremflickr).
+os.environ["IMAGE_PROVIDER"] = "mock"
+os.environ["UNSPLASH_ACCESS_KEY"] = ""
+# Keep tests hermetic: a local backend/.env may set real OAuth values.
+os.environ["OWNER_REFRESH_TOKEN"] = ""
+os.environ["OWNER_GOOGLE_EMAIL"] = ""
+os.environ["GOOGLE_CLIENT_ID"] = ""
+os.environ["GOOGLE_CLIENT_SECRET"] = ""
 
 import pytest
 import pytest_asyncio
@@ -69,8 +77,54 @@ def session_token():
     return create_session_token(str(uuid.uuid4()))
 
 
-@pytest.fixture
-def api_key(client, session_token):
+@pytest_asyncio.fixture
+async def non_member_user_id(db_session):
+    from backend.db.models import User
+
+    user = User(
+        id=str(uuid.uuid4()),
+        google_email=f"free-{uuid.uuid4().hex}@test.local",
+        is_member=False,
+    )
+    db_session.add(user)
+    await db_session.commit()
+    return user.id
+
+
+@pytest_asyncio.fixture
+async def owner_user_id(db_session):
+    from backend.db.models import User
+
+    user = User(
+        id=str(uuid.uuid4()),
+        google_email=f"owner-{uuid.uuid4().hex}@test.local",
+        is_owner=True,
+        is_member=True,
+    )
+    db_session.add(user)
+    await db_session.commit()
+    return user.id
+
+
+@pytest_asyncio.fixture
+async def api_key(client, session_token, test_session_factory):
+    import jwt as pyjwt
+
+    from backend.config import settings
+    from backend.db.models import User
+
+    payload = pyjwt.decode(session_token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+    user_id = payload["sub"]
+
+    async with test_session_factory() as session:
+        user = User(
+            id=user_id,
+            google_email=f"member-{user_id}@test.local",
+            is_member=True,
+        )
+        session.add(user)
+        await session.commit()
+
     r = client.post(
         "/admin/keys",
         json={"name": "test"},

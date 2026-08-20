@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { api } from '../lib/api'
 import { useIsMobile } from '../hooks/use-mobile'
-import { LogOut, Key, BarChart3, LayoutDashboard, User, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard } from 'lucide-react'
+import { LogOut, Key, BarChart3, LayoutDashboard, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard } from 'lucide-react'
 import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat } from 'react-icons/hi'
 import { ChatHistoryProvider, useChatHistory } from '../lib/chat-history'
 import Avatar from './Avatar'
@@ -56,12 +56,13 @@ function SidebarInner() {
   const loc = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
-  const { conversations, activeId, setActiveId, remove } = useChatHistory()
+  const { conversations, activeId, setActiveId, remove, refresh } = useChatHistory()
   const [membersUrl, setMembersUrl] = useState('')
 
   useEffect(() => {
     api.health().then((h) => setMembersUrl(h.members_url || '')).catch(() => {})
-  }, [])
+    refresh()
+  }, [refresh])
 
   const handleLogout = () => {
     logout()
@@ -154,7 +155,15 @@ function SidebarInner() {
       <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
         <DropdownMenuTrigger asChild>
           <button className="flex items-center gap-3 w-full text-left group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
-            <div className="h-8 w-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-medium text-zinc-300 shrink-0 overflow-hidden">
+            <div
+              className="h-8 w-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-medium text-zinc-300 shrink-0 overflow-hidden cursor-pointer transition-opacity hover:opacity-80"
+              title="View profile"
+              onClick={(e) => {
+                e.stopPropagation()
+                setMenuOpen(false)
+                setProfileOpen(true)
+              }}
+            >
               <Avatar url={user?.avatar_url} name={user?.display_name} email={user?.email} className="h-full w-full rounded-full" />
             </div>
             <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
@@ -192,10 +201,6 @@ function SidebarInner() {
             sideOffset={8}
             className="w-48"
           >
-            <DropdownMenuItem onClick={() => setProfileOpen(true)}>
-              <User size={16} />
-              Profile
-            </DropdownMenuItem>
             {membersUrl ? (
               <DropdownMenuItem asChild>
                 <a href={membersUrl} target="_blank" rel="noreferrer">
@@ -251,6 +256,9 @@ function ProfileDialog({
   onOpenChange: (open: boolean) => void
   user: { id: string; email: string; display_name: string; avatar_url?: string; youtube_channel_id?: string | null; is_owner: boolean; is_member: boolean; created_at?: string } | null
 }) {
+  const { logout } = useAuth()
+  const navigate = useNavigate()
+
   if (!user) return null
 
   const plan = user.is_owner
@@ -316,10 +324,21 @@ function ProfileDialog({
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="grid grid-cols-2 gap-2">
+          <button
+            onClick={() => {
+              onOpenChange(false)
+              logout()
+              navigate('/login')
+            }}
+            className="inline-flex items-center justify-center gap-3 rounded-lg bg-red-950/50 px-8 py-3 text-sm font-medium text-red-400 transition-colors hover:bg-red-900/50 hover:text-red-300"
+          >
+            <LogOut size={16} />
+            Log out
+          </button>
           <button
             onClick={() => onOpenChange(false)}
-            className="btn-primary w-full"
+            className="btn-primary"
           >
             Done
           </button>
@@ -394,8 +413,8 @@ export default function Layout() {
             <SidebarInner />
           </Sidebar>
         )}
-        <SidebarInset className="bg-zinc-950 min-h-screen flex flex-col flex-1 overflow-x-hidden">
-          <main className="p-8 flex-1 flex flex-col min-w-0 md:pb-8 pb-24">
+        <SidebarInset className="bg-zinc-950 h-dvh flex flex-col flex-1 overflow-hidden">
+          <main className="p-8 flex-1 flex flex-col min-w-0 overflow-y-auto md:pb-8 pb-24">
             <Outlet />
           </main>
         </SidebarInset>

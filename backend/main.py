@@ -1,3 +1,4 @@
+import logging
 import time
 from contextlib import asynccontextmanager
 
@@ -11,11 +12,18 @@ from backend.proxy.router import router as proxy_router
 from backend.auth.youtube import router as youtube_router
 from backend.admin.router import router as admin_router
 from backend.chat.router import router as chat_router
+from backend.chat.conversations import router as conversations_router
+from backend.ratelimit import SlidingWindowRateLimiter, bucket_key_for_token
+
+rate_limiter = SlidingWindowRateLimiter(limit=settings.rate_limit_per_minute)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    logging.getLogger("uvicorn.error").info(
+        "Gemini vision configured: %s", bool(settings.gemini_api_key)
+    )
     yield
 
 
@@ -33,10 +41,20 @@ app.add_middleware(
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     if request.url.path.startswith("/v1/"):
-        import asyncio
-        rate = getattr(request.state, "_rate_limit", settings.rate_limit_per_minute)
-        sleep_time = 60.0 / rate
-        await asyncio.sleep(sleep_time)
+        token = ""
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header.removeprefix("Bearer ").strip()
+        else:
+            token = (request.headers.get("x-api-key") or "").strip()
+        key = bucket_key_for_token(token) if token else f"ip:{request.client.host if request.client else 'unknown'}"
+        allowed, retry_after = rate_limiter.check(key)
+        if not allowed:
+            return JSONResponse(
+                content={"detail": "Rate limit exceeded. Try again later."},
+                status_code=429,
+                headers={"Retry-After": str(retry_after)},
+            )
     response = await call_next(request)
     return response
 
@@ -45,6 +63,7 @@ app.include_router(youtube_router)
 app.include_router(admin_router)
 app.include_router(proxy_router)
 app.include_router(chat_router)
+app.include_router(conversations_router)
 
 
 @app.get("/health")

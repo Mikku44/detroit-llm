@@ -1,16 +1,17 @@
-import json
 import re
-from urllib.parse import parse_qs
+import os
+from urllib.parse import parse_qs, quote
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, JSONResponse
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from backend.config import settings, BASE_DIR
 from backend.db.database import get_db
 from backend.db.models import User
-from backend.auth.session import create_session_token
+from backend.auth.session import create_session_token, require_session
 
 router = APIRouter(prefix="/auth/youtube", tags=["auth"])
 
@@ -23,18 +24,33 @@ YOUTUBE_MEMBERS_API = "https://www.googleapis.com/youtube/v3/members"
 YOUTUBE_CHANNELS_API = "https://www.googleapis.com/youtube/v3/channels"
 
 
-def _persist_env(key: str, value: str):
-    """Write/update a key in backend/.env so tokens survive restarts."""
+def _persist_env(key: str, value: str) -> None:
+    """Write/update a key in backend/.env so tokens survive restarts.
+
+    Values are written double-quoted (escaped) so any characters that would
+    otherwise break dotenv parsing survive, and the file is replaced atomically
+    so a partial write is never read.
+    """
     env_path = BASE_DIR / ".env"
+    quoted = '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
     try:
         text = env_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         text = ""
-    if re.search(rf"^{key}=", text, flags=re.MULTILINE):
-        text = re.sub(rf"^{key}=.*$", f"{key}={value}", text, flags=re.MULTILINE)
-    else:
-        text = text.rstrip() + f"\n{key}={value}\n"
-    env_path.write_text(text, encoding="utf-8")
+    lines = text.splitlines()
+    replaced = False
+    for i, line in enumerate(lines):
+        if re.match(rf"^{key}\s*=", line):
+            lines[i] = f"{key}={quoted}"
+            replaced = True
+    if not replaced:
+        if lines and lines[-1].strip() != "":
+            lines.append("")
+        lines.append(f"{key}={quoted}")
+    content = "\n".join(lines).rstrip() + "\n"
+    tmp_path = env_path.with_name(env_path.name + ".tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    os.replace(tmp_path, env_path)
 
 
 def _get_owner_flow_url() -> str:
@@ -111,6 +127,8 @@ async def _fetch_member_channel_ids(client: httpx.AsyncClient, access_token: str
             break
         data = resp.json()
         for item in data.get("items", []):
+            if not isinstance(item, dict):
+                continue
             details = item.get("snippet", {}).get("memberDetails", {})
             channel_id = details.get("channelId")
             if channel_id:
@@ -162,6 +180,12 @@ async def _is_youtube_member(client: httpx.AsyncClient, user_channel_id: str | N
     return user_channel_id in member_ids
 
 
+def _is_owner(email: str) -> bool:
+    """A user is the owner only when a non-empty email matches the configured owner email."""
+    owner_email = (settings.owner_google_email or "").strip().lower()
+    return bool(email and owner_email and email.strip().lower() == owner_email)
+
+
 @router.get("/login")
 async def youtube_login():
     return RedirectResponse(url=_get_owner_flow_url())
@@ -176,15 +200,32 @@ async def user_login(request: Request):
 
 @router.get("/callback")
 async def youtube_callback(
-    code: str,
-    request: Request,
     db: AsyncSession = Depends(get_db),
+    code: str | None = None,
+    error: str | None = None,
     state: str = "",
 ):
+    # Safely parse state query string
+    parsed_state = parse_qs(state)
+    target_redirect = parsed_state.get("redirect", [""])[0]
+
+    # Google redirects here with `error` when the user denies consent.
+    if error:
+        if target_redirect == "dashboard":
+            return RedirectResponse(
+                url=f"{settings.dashboard_url}/callback?error={quote(error, safe='')}"
+            )
+        raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
+
+    if not code:
+        raise HTTPException(status_code=400, detail="Missing authorization code")
+
     async with httpx.AsyncClient() as client:
         tokens = await _exchange_code(client, code)
         access_token = tokens.get("access_token")
         refresh_token = tokens.get("refresh_token")
+        if not access_token:
+            raise HTTPException(status_code=400, detail="Token exchange did not return an access token")
         user_info = await _get_google_user(client, access_token)
         user_channel_id = await _get_user_channel_id(client, access_token)
         member = await _is_youtube_member(client, user_channel_id)
@@ -197,9 +238,9 @@ async def youtube_callback(
     user = result.scalar_one_or_none()
 
     avatar_url = user_info.get("picture", "")
+    is_owner = _is_owner(email)
 
     if not user:
-        is_owner = email == settings.owner_google_email.lower()
         user = User(
             google_email=email,
             google_sub=google_sub,
@@ -210,20 +251,23 @@ async def youtube_callback(
             is_member=is_owner or member,
         )
         db.add(user)
-        await db.commit()
-        await db.refresh(user)
+        try:
+            await db.commit()
+        except IntegrityError:
+            # Lost a race with a concurrent login for the same google_sub.
+            await db.rollback()
+            result = await db.execute(stmt)
+            user = result.scalar_one_or_none()
+            if user is None:
+                raise HTTPException(status_code=500, detail="Failed to create user")
     else:
-        is_owner = email == settings.owner_google_email.lower()
         user.display_name = user_info.get("name", "") or user.display_name
         if avatar_url:
             user.avatar_url = avatar_url
         if user_channel_id:
             user.youtube_channel_id = user_channel_id
         user.is_owner = is_owner
-        if not user.is_owner:
-            user.is_member = member
-        else:
-            user.is_member = True
+        user.is_member = is_owner or member
         await db.commit()
 
     if refresh_token and user.is_owner:
@@ -231,10 +275,6 @@ async def youtube_callback(
         _persist_env("OWNER_REFRESH_TOKEN", refresh_token)
 
     session_token = create_session_token(user.id)
-
-    # Safely parse state query string
-    parsed_state = parse_qs(state)
-    target_redirect = parsed_state.get("redirect", [""])[0]
 
     if target_redirect == "dashboard":
         return RedirectResponse(url=f"{settings.dashboard_url}/callback?token={session_token}")
@@ -249,7 +289,14 @@ async def youtube_callback(
 @router.post("/verify-members")
 async def verify_members(
     db: AsyncSession = Depends(get_db),
+    user_id: str = Depends(require_session),
 ):
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    owner = result.scalar_one_or_none()
+    if not owner or not owner.is_owner:
+        raise HTTPException(status_code=403, detail="Owner access required")
+
     if not settings.owner_refresh_token:
         raise HTTPException(
             status_code=400, 

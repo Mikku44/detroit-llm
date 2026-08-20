@@ -7,19 +7,29 @@
       "npm": "@ai-sdk/openai-compatible",
       "options": {
         "baseURL": "http://localhost:8000/v1",
-        "apiKey": "{env:DETROIT_API_KEY}"
+        "apiKey": "sk-dt-1737bc1dc8c93bdd-c427032177978570cd8b8cf79ca47f8afb25839a07ea3a2c"
       },
       "models": {
         "deepseek-v4-pro": {
           "id": "deepseek-v4-pro",
           "name": "DeepSeek V4 Pro",
           "reasoning": true,
-          "tool_call": true
+          "tool_call": true,
+          "attachment": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          }
         },
         "deepseek-v4-flash": {
           "id": "deepseek-v4-flash",
           "name": "DeepSeek V4 Flash",
-          "tool_call": true
+          "tool_call": true,
+          "attachment": true,
+          "modalities": {
+            "input": ["text", "image"],
+            "output": ["text"]
+          }
         }
       }
     }

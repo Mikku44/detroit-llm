@@ -34,10 +34,19 @@ async def get_db() -> AsyncSession:
 
 async def init_db():
     async with engine.begin() as conn:
-        from backend.db.models import User, ApiKey, UsageLog
+        from backend.db.models import User, ApiKey, UsageLog, Conversation, ConversationMessage
         await conn.run_sync(Base.metadata.create_all)
         from sqlalchemy import text
         try:
             await conn.execute(text("ALTER TABLE api_keys ADD COLUMN raw_key VARCHAR"))
         except Exception:
             pass
+        # Lightweight migrations for conversation tables created before these columns.
+        for column_def in (
+            "ALTER TABLE conversation_messages ADD COLUMN finish_reason VARCHAR",
+            "ALTER TABLE conversation_messages ADD COLUMN duration_ms INTEGER",
+        ):
+            try:
+                await conn.execute(text(column_def))
+            except Exception:
+                pass

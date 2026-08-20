@@ -9,6 +9,12 @@ export default function Callback() {
   const { setApiKey } = useAuth()
 
   useEffect(() => {
+    const oauthError = searchParams.get('error')
+    if (oauthError) {
+      toast.error(decodeURIComponent(oauthError))
+      navigate('/login', { replace: true })
+      return
+    }
     const key = searchParams.get('token')
     if (key) {
       setApiKey(key)

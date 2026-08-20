@@ -1,6 +1,31 @@
 from backend.auth.session import create_session_token
 
 
+def test_verify_members_requires_auth(client):
+    r = client.post("/auth/youtube/verify-members")
+    assert r.status_code == 401
+
+
+def test_verify_members_non_owner_rejected(client, non_member_user_id):
+    token = create_session_token(non_member_user_id)
+    r = client.post(
+        "/auth/youtube/verify-members",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 403
+    assert "Owner access required" in r.json()["detail"]
+
+
+def test_verify_members_owner_reaches_handler(client, owner_user_id):
+    token = create_session_token(owner_user_id)
+    # Owner passes the gate; without OWNER_REFRESH_TOKEN the handler 400s.
+    r = client.post(
+        "/auth/youtube/verify-members",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 400
+
+
 def test_me_without_token_returns_401(client):
     r = client.get("/admin/me")
     assert r.status_code == 401

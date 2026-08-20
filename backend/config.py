@@ -31,6 +31,10 @@ class Settings(BaseSettings):
 
     members_url: str = ""
 
+    # Image generation provider: "loremflickr" (default, free, no key) | "unsplash" (needs access key) | "auto" | "mock" (offline)
+    image_provider: str = "loremflickr"
+    unsplash_access_key: str = ""
+
     rate_limit_per_minute: int = 60
 
     model_config = SettingsConfigDict(

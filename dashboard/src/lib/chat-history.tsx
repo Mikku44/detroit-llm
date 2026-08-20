@@ -1,83 +1,121 @@
 import { createContext, useContext, useState, useCallback, type ReactNode } from 'react'
+import { api } from './api'
 
 export type Message = {
-  id: string
+  id?: string
   role: "user" | "assistant"
   content: string
+  reasoning?: string
+  error?: boolean
+  cta?: { label: string; href: string; external?: boolean }
+  attachments?: Array<{ id: string; name: string; kind: 'image' | 'text'; dataUrl?: string; text?: string; size: number }>
+  model?: string
+  durationMs?: number
+  finish_reason?: string | null
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
 }
 
 export type Conversation = {
   id: string
   title: string
-  messages: Message[]
   updatedAt: number
-}
-
-const HISTORY_KEY = "chat_history"
-
-function loadHistory(): Conversation[] {
-  try {
-    return JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]")
-  } catch {
-    return []
-  }
-}
-
-function saveHistory(convs: Conversation[]) {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(convs))
 }
 
 type ChatHistoryContextType = {
   conversations: Conversation[]
   activeId: string | null
   setActiveId: (id: string | null) => void
-  save: (convId: string, messages: Message[]) => void
+  save: (convId: string | null, msgs: Message[], model?: string) => Promise<string | null>
   remove: (convId: string) => void
-  getMessages: (convId: string) => Message[]
+  getMessages: (convId: string) => Promise<Message[]>
+  refresh: () => Promise<void>
 }
 
 const ChatHistoryContext = createContext<ChatHistoryContextType | null>(null)
 
+function titleFor(msgs: Message[]): string {
+  if (msgs.length === 0) return 'New Chat'
+  const firstUser = msgs.find((m) => m.role === 'user')
+  const base = firstUser ? firstUser.content : 'New Chat'
+  return base.slice(0, 60) + (base.length > 60 ? '...' : '')
+}
+
 export function ChatHistoryProvider({ children }: { children: ReactNode }) {
-  const [conversations, setConversations] = useState<Conversation[]>(loadHistory)
+  const [conversations, setConversations] = useState<Conversation[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
 
-  const save = useCallback((convId: string, msgs: Message[]) => {
-    if (msgs.length === 0) return
-    const firstUser = msgs.find((m) => m.role === "user")
-    const title = firstUser
-      ? firstUser.content.slice(0, 60) + (firstUser.content.length > 60 ? "..." : "")
-      : "New Chat"
-    setConversations((prev) => {
-      const idx = prev.findIndex((c) => c.id === convId)
-      const updated: Conversation = { id: convId, title, messages: msgs, updatedAt: Date.now() }
-      let next: Conversation[]
-      if (idx >= 0) {
-        next = [...prev]
-        next[idx] = updated
-      } else {
-        next = [updated, ...prev]
+  const refresh = useCallback(async () => {
+    try {
+      const d = await api.listConversations()
+      const convs = ((d?.conversations || []) as Array<{ id: string; title?: string; updated_at?: string }>)
+        .map((c) => ({
+          id: c.id,
+          title: c.title || 'New Chat',
+          updatedAt: c.updated_at ? new Date(c.updated_at).getTime() : Date.now(),
+        }))
+      setConversations(convs)
+    } catch {
+      setConversations([])
+    }
+  }, [])
+
+  const save = useCallback(
+    async (convId: string | null, msgs: Message[], model?: string) => {
+      if (!msgs || msgs.length === 0) return convId
+      const payload = {
+        title: titleFor(msgs),
+        model: model || undefined,
+        messages: msgs.map((m) => ({
+          role: m.role,
+          content: m.content,
+          reasoning: m.reasoning,
+          attachments: m.attachments,
+          model: m.model,
+          usage: m.usage,
+          finish_reason: m.finish_reason,
+          durationMs: m.durationMs,
+        })),
       }
-      saveHistory(next)
-      return next
-    })
-  }, [])
+      try {
+        if (convId) {
+          await api.updateConversation(convId, payload)
+          return convId
+        }
+        const created = await api.createConversation(payload)
+        setActiveId(created.id)
+        return created.id
+      } catch {
+        return convId
+      } finally {
+        refresh()
+      }
+    },
+    [refresh],
+  )
 
-  const remove = useCallback((convId: string) => {
-    setConversations((prev) => {
-      const next = prev.filter((c) => c.id !== convId)
-      saveHistory(next)
-      return next
-    })
-  }, [])
+  const remove = useCallback(
+    (convId: string) => {
+      api
+        .deleteConversation(convId)
+        .catch(() => {})
+        .finally(() => refresh())
+      setConversations((prev) => prev.filter((c) => c.id !== convId))
+      setActiveId((cur) => (cur === convId ? null : cur))
+    },
+    [refresh],
+  )
 
-  const getMessages = useCallback((convId: string) => {
-    const conv = conversations.find((c) => c.id === convId)
-    return conv?.messages || []
-  }, [conversations])
+  const getMessages = useCallback(async (convId: string): Promise<Message[]> => {
+    try {
+      const detail = await api.getConversation(convId)
+      return (detail?.messages || []) as Message[]
+    } catch {
+      return []
+    }
+  }, [])
 
   return (
-    <ChatHistoryContext.Provider value={{ conversations, activeId, setActiveId, save, remove, getMessages }}>
+    <ChatHistoryContext.Provider value={{ conversations, activeId, setActiveId, save, remove, getMessages, refresh }}>
       {children}
     </ChatHistoryContext.Provider>
   )
