@@ -132,3 +132,37 @@ def test_usage_models_records_one_request(client, session_token, api_key):
     assert body["models"][0]["requests"] == 1
     assert body["models"][0]["model"]
     assert body["models"][0]["total_tokens"] > 0
+
+
+def test_usage_limits_free_user(client, non_member_user_id):
+    """Free users get weekly/monthly limits; the tier table is included."""
+    from backend.auth.session import create_session_token
+
+    token = create_session_token(non_member_user_id)
+    body = client.get(
+        "/admin/usage/limits",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    assert body["plan"] == "free"
+    assert body["is_free"] is True
+    assert body["current_tier_id"] == "free"
+    assert body["weekly_limit"] == 100000
+    assert body["monthly_limit"] == 435000
+    assert body["weekly_used"] == 0
+    assert body["monthly_used"] == 0
+    assert [t["id"] for t in body["tiers"]] == ["free", "nomad", "dreamer", "entrepreneur", "angel"]
+
+
+def test_usage_limits_member_unlimited(client, owner_user_id):
+    """Member/owner tiers have no weekly/monthly cap."""
+    from backend.auth.session import create_session_token
+
+    token = create_session_token(owner_user_id)
+    body = client.get(
+        "/admin/usage/limits",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    assert body["plan"] in ("member", "owner")
+    assert body["is_free"] is False
+    assert body["weekly_limit"] is None
+    assert body["monthly_limit"] is None

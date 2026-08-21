@@ -11,6 +11,7 @@ import Layout from './components/Layout'
 import ChatV2 from './pages/ChatV2'
 import Chat3 from './pages/Chat3'
 import Docs from './pages/Docs'
+import CookieConsent from './components/CookieConsent'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -21,19 +22,22 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route path="/welcome" element={<Welcome />} />
-      <Route path="/callback" element={<Callback />} />
-      <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-        <Route index element={<Dashboard />} />
-        <Route path="keys" element={<Keys />} />
-        <Route path="usage" element={<Usage />} />
-        <Route path="chat-assistant" element={<Chat />} />
-        {/* <Route path="chatv2" element={<ChatV2 />} /> */}
-        <Route path="chat" element={<Chat3 />} />
-        <Route path="docs" element={<Docs />} />
-      </Route>
-    </Routes>
+    <>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/welcome" element={<Welcome />} />
+        <Route path="/callback" element={<Callback />} />
+        <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+          <Route index element={<Dashboard />} />
+          <Route path="keys" element={<Keys />} />
+          <Route path="usage" element={<Usage />} />
+          <Route path="chat-assistant" element={<Chat />} />
+          {/* <Route path="chatv2" element={<ChatV2 />} /> */}
+          <Route path="chat" element={<Chat3 />} />
+          <Route path="docs" element={<Docs />} />
+        </Route>
+      </Routes>
+      <CookieConsent />
+    </>
   )
 }

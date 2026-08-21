@@ -8,6 +8,7 @@ from backend.db.database import get_db
 from backend.db.models import User, ApiKey, UsageLog
 from backend.auth.session import require_session
 from backend.auth.api_keys import create_api_key_for_user, revoke_api_key
+from backend.config import settings, TIER_OPTIONS
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -104,6 +105,52 @@ async def delete_key(
     if not success:
         raise HTTPException(status_code=404, detail="Key not found")
     return {"status": "revoked"}
+
+
+@router.get("/usage/limits")
+async def get_usage_limits(
+    user_id: str = Depends(require_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Tier limits + current usage + tier pricing table, for the usage page."""
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.is_owner:
+        plan = "owner"
+    elif user.is_member:
+        plan = "member"
+    else:
+        plan = "free"
+
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    async def sum_tokens_since(cutoff) -> int:
+        usage_stmt = (
+            select(func.coalesce(func.sum(UsageLog.total_tokens), 0))
+            .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
+            .where(ApiKey.user_id == user_id, UsageLog.created_at >= cutoff)
+        )
+        r = await db.execute(usage_stmt)
+        return int(r.scalar_one())
+
+    weekly_used = await sum_tokens_since(now_naive - timedelta(days=7))
+    monthly_used = await sum_tokens_since(now_naive - timedelta(days=30))
+
+    is_free = plan == "free"
+    return {
+        "plan": plan,
+        "is_free": is_free,
+        "current_tier_id": "free" if is_free else None,
+        "weekly_limit": settings.free_weekly_tokens if is_free else None,
+        "monthly_limit": settings.free_monthly_tokens if is_free else None,
+        "weekly_used": weekly_used,
+        "monthly_used": monthly_used,
+        "tiers": TIER_OPTIONS,
+    }
 
 
 @router.get("/usage")

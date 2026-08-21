@@ -38,6 +38,8 @@ export const api = {
 
   getUsageModels: (days: number = 7) => request(`/admin/usage/models?days=${days}`),
 
+  getUsageLimits: () => request('/admin/usage/limits'),
+
   listUsers: () => request('/admin/users'),
 
   verifyMembers: () => request('/auth/youtube/verify-members', { method: 'POST' }),

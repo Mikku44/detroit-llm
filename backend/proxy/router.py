@@ -4,7 +4,7 @@ import json
 import re
 import time
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 
 import httpx
@@ -216,17 +216,55 @@ async def _find_api_key(db: AsyncSession, user_id: str) -> ApiKey | None:
     return result.scalar_one_or_none()
 
 
-async def require_member(
+async def _tier_usage(db: AsyncSession, user_id: str) -> tuple[int, int]:
+    """Total tokens used over the last 7 days (weekly) and 30 days (monthly)."""
+    from sqlalchemy import func, select
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    async def sum_since(cutoff) -> int:
+        stmt = (
+            select(func.coalesce(func.sum(UsageLog.total_tokens), 0))
+            .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
+            .where(ApiKey.user_id == user_id, UsageLog.created_at >= cutoff)
+        )
+        result = await db.execute(stmt)
+        return int(result.scalar_one())
+
+    weekly = await sum_since(now - timedelta(days=7))
+    monthly = await sum_since(now - timedelta(days=30))
+    return weekly, monthly
+
+
+async def require_access(
     user_id: str = Depends(require_api_key),
     db: AsyncSession = Depends(get_db),
 ) -> str:
-    """Gate chat completions behind paid membership (member or owner only)."""
+    """Gate the OpenAI-compatible API by tier.
+
+    Owner/member tiers have unlimited access. Free-tier users are allowed in but
+    limited to a weekly and monthly total-token budget.
+    """
     from sqlalchemy import select
     stmt = select(User).where(User.id == user_id)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
-    if not user or not (user.is_member or user.is_owner):
+    if not user:
         raise HTTPException(status_code=403, detail="Membership required")
+    if user.is_member or user.is_owner:
+        return user_id
+
+    weekly_used, monthly_used = await _tier_usage(db, user_id)
+    if weekly_used >= settings.free_weekly_tokens:
+        raise HTTPException(
+            status_code=403,
+            detail="Weekly limit reached. Upgrade to a paid membership for more usage.",
+        )
+    if monthly_used >= settings.free_monthly_tokens:
+        raise HTTPException(
+            status_code=403,
+            detail="Monthly limit reached. Upgrade to a paid membership for more usage.",
+        )
     return user_id
 
 
@@ -696,6 +734,19 @@ def _with_log(resp, user_id: str, model: str, messages: list):
     """Wrap a StreamingResponse or JSONResponse to print request + response to terminal."""
     # _print_request_log(user_id, model, messages)
 
+    def safe_print(text: str) -> None:
+        try:
+            print(text)
+        except UnicodeEncodeError:
+            import sys
+            stream = getattr(sys.stdout, "buffer", None)
+            if stream is not None:
+                encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+                stream.write((text + "\n").encode(encoding, errors="replace"))
+                stream.flush()
+            else:
+                print(text.encode("utf-8", errors="replace"))
+
     if isinstance(resp, StreamingResponse):
         original = resp.body_iterator
 
@@ -712,8 +763,8 @@ def _with_log(resp, user_id: str, model: str, messages: list):
             finally:
                 raw = b"".join(chunks)
                 text = _extract_stream_text(raw) or "(no text)"
-                print(f"  -> [{status}] {text}")
-                print("=" * 80)
+                safe_print(f"  -> [{status}] {text}")
+                safe_print("=" * 80)
 
         resp.body_iterator = wrapped()
         return resp
@@ -723,11 +774,11 @@ def _with_log(resp, user_id: str, model: str, messages: list):
     except Exception:
         payload = {}
     if isinstance(payload, dict) and "error" in payload:
-        print(f"  -> [error] {json.dumps(payload['error'], ensure_ascii=False)}")
+        safe_print(f"  -> [error] {json.dumps(payload['error'], ensure_ascii=False)}")
     else:
         content = (payload.get("choices") or [{}])[0].get("message", {}).get("content", "")
-        print(f"  -> [ok] {content}")
-    print("=" * 80)
+        safe_print(f"  -> [ok] {content}")
+    safe_print("=" * 80)
     return resp
 
 
@@ -1331,7 +1382,7 @@ async def _proxy_image_tool_loop(
 @router.post("/chat/completions")
 async def chat_completions(
     request: Request,
-    user_id: str = Depends(require_member),
+    user_id: str = Depends(require_access),
     db: AsyncSession = Depends(get_db),
 ):
     body = await request.json()
@@ -1543,7 +1594,7 @@ def _mock_image_b64(prompt: str, model: str, size: str, seed_text: str) -> str:
 @router.post("/images/generations")
 async def image_generations(
     request: Request,
-    user_id: str = Depends(require_member),
+    user_id: str = Depends(require_access),
     db: AsyncSession = Depends(get_db),
 ):
     """OpenAI-compatible image generation. Returns a deterministic placeholder
@@ -1597,7 +1648,7 @@ async def image_generations(
 @router.post("/responses")
 async def responses_api(
     request: Request,
-    user_id: str = Depends(require_member),
+    user_id: str = Depends(require_access),
     db: AsyncSession = Depends(get_db),
 ):
     body = await request.json()
@@ -1716,7 +1767,7 @@ def _anthropic_chat_payload(body: dict) -> dict:
 @router.post("/messages")
 async def anthropic_messages(
     request: Request,
-    user_id: str = Depends(require_member),
+    user_id: str = Depends(require_access),
     db: AsyncSession = Depends(get_db),
 ):
     """Anthropic Messages API compatible endpoint, proxied to DeepSeek/Gemini.
@@ -2229,7 +2280,7 @@ async def _proxy_gemini_responses(
 @router.post("/messages/count_tokens")
 async def anthropic_count_tokens(
     request: Request,
-    user_id: str = Depends(require_member),
+    user_id: str = Depends(require_access),
     db: AsyncSession = Depends(get_db),
 ):
     """Anthropic token-counting endpoint (used by Claude Code before requests)."""
@@ -2245,7 +2296,7 @@ async def anthropic_count_tokens(
 @router.post("/chat/compact")
 async def chat_compact(
     request: Request,
-    user_id: str = Depends(require_member),
+    user_id: str = Depends(require_access),
     db: AsyncSession = Depends(get_db),
 ):
     """Summarize the conversation history so a long chat can be compacted."""

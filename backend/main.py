@@ -58,7 +58,6 @@ async def rate_limit_middleware(request: Request, call_next):
     response = await call_next(request)
     return response
 
-
 app.include_router(youtube_router)
 app.include_router(admin_router)
 app.include_router(proxy_router)

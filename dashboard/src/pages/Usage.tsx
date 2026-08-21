@@ -12,6 +12,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
 import ApiKeyButtons from '../components/ApiKeyButtons'
 import { Skeleton } from '../components/ui/skeleton'
+import { NumberTicker } from '../components/shadcn-space/number-ticker/number-ticker-01'
 
 interface UsageRow {
   date: string
@@ -19,6 +20,70 @@ interface UsageRow {
   prompt_tokens: number
   completion_tokens: number
   total_tokens: number
+}
+
+interface Tier {
+  id: string
+  emoji: string
+  name: string
+  price: string
+  net: string
+  weekly: number
+  monthly: number
+  deepseek_cost: string
+  profit: string
+  margin: string
+}
+
+interface UsageLimits {
+  plan: 'free' | 'member' | 'owner'
+  is_free: boolean
+  current_tier_id: string | null
+  weekly_limit: number | null
+  monthly_limit: number | null
+  weekly_used: number
+  monthly_used: number
+  tiers: Tier[]
+}
+
+const PLAN_LABEL: Record<string, string> = {
+  free: 'Free',
+  member: 'Member',
+  owner: 'Owner',
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1e6) {
+    const m = n / 1e6
+    return `${Number.isInteger(m) ? m : m.toFixed(2).replace(/\.?0+$/, '')}M`
+  }
+  if (n >= 1e3) {
+    const k = n / 1e3
+    return `${Number.isInteger(k) ? k : k.toFixed(1).replace(/\.0$/, '')}K`
+  }
+  return String(n)
+}
+
+function QuotaBar({ label, used, limit }: { label: string; used: number; limit: number }) {
+  const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0
+  const over = limit > 0 && used >= limit
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center justify-between text-sm">
+        <span className="text-zinc-400">{label}</span>
+        <span className="tabular-nums text-zinc-300">
+          {formatTokens(used)} / {formatTokens(limit)}
+          <span className="ml-1 text-zinc-500">({Math.round(pct)}%)</span>
+        </span>
+      </div>
+      <div className="h-2.5 overflow-hidden rounded-full bg-zinc-800">
+        <div
+          className={`h-full rounded-full ${over ? 'bg-red-500' : 'bg-(--primary-color)'}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  )
 }
 
 const CHART_COLOR = 'var(--primary-color)'
@@ -42,6 +107,7 @@ export default function Usage() {
   const [punchcard, setPunchcard] = useState<number[][]>([])
   const [punchMax, setPunchMax] = useState(0)
   const [loading, setLoading] = useState(true)
+  const [limits, setLimits] = useState<UsageLimits | null>(null)
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null)
   const chartRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ x: number; startIdx: number; span: number } | null>(null)
@@ -101,6 +167,20 @@ export default function Usage() {
     }
   }, [days])
 
+  useEffect(() => {
+    api
+      .getUsageLimits()
+      .then(setLimits)
+      .catch(() => setLimits(null))
+  }, [])
+
+  const reloadLimits = () => {
+    api
+      .getUsageLimits()
+      .then(setLimits)
+      .catch(() => setLimits(null))
+  }
+
   const totals = usage.reduce(
     (acc, r) => ({
       requests: acc.requests + r.requests,
@@ -136,8 +216,7 @@ export default function Usage() {
     dragRef.current = null
   }
 
-  return (
-    <div>
+  return (    <div>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div className="flex items-center gap-3">
           <h2 className="text-2xl font-bold text-zinc-100">Usage</h2>
@@ -178,20 +257,75 @@ export default function Usage() {
           <>
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
               <div className="text-sm text-zinc-500 mb-1">Total Requests</div>
-              <div className="text-2xl font-semibold text-zinc-100">{totals.requests}</div>
+              <div className="text-2xl font-semibold text-zinc-100 tabular-nums">
+                <NumberTicker end={totals.requests} duration={1.2} />
+              </div>
             </div>
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
               <div className="text-sm text-zinc-500 mb-1">Total Tokens</div>
-              <div className="text-2xl font-semibold text-zinc-100">{totals.tokens.toLocaleString()}</div>
+              <div className="text-2xl font-semibold text-zinc-100 tabular-nums">
+                <NumberTicker end={totals.tokens} duration={1.2} />
+              </div>
             </div>
             <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
               <div className="text-sm text-zinc-500 mb-1">Avg Tokens / Request</div>
-              <div className="text-2xl font-semibold text-zinc-100">
-                {totals.requests > 0 ? Math.round(totals.tokens / totals.requests).toLocaleString() : '0'}
+              <div className="text-2xl font-semibold text-zinc-100 tabular-nums">
+                <NumberTicker end={totals.requests > 0 ? Math.round(totals.tokens / totals.requests) : 0} duration={1.2} />
               </div>
             </div>
           </>
         )}
+      </div>
+
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-8">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-3">
+            <h3 className="text-lg font-semibold text-zinc-100">Plan &amp; Weekly Quota</h3>
+            <span
+              className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                limits?.plan === 'free'
+                  ? 'bg-zinc-800 text-zinc-400'
+                  : limits?.plan === 'owner'
+                    ? 'bg-yellow-900/50 text-yellow-400'
+                    : 'bg-emerald-900/50 text-emerald-400'
+              }`}
+            >
+              {limits ? PLAN_LABEL[limits.plan] : '…'}
+            </span>
+          </div>
+          <button
+            onClick={reloadLimits}
+            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800"
+          >
+            Refresh
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          {limits === null ? (
+            <div className="space-y-3">
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-2.5 w-full" />
+              <Skeleton className="h-4 w-40" />
+              <Skeleton className="h-2.5 w-full" />
+            </div>
+          ) : limits.is_free && limits.weekly_limit != null && limits.monthly_limit != null ? (
+            <>
+              <QuotaBar label="Tokens / week" used={limits.weekly_used} limit={limits.weekly_limit} />
+              <QuotaBar label="Tokens / month" used={limits.monthly_used} limit={limits.monthly_limit} />
+              {(limits.weekly_used >= limits.weekly_limit ||
+                limits.monthly_used >= limits.monthly_limit) && (
+                <p className="text-xs text-red-400">
+                  You&apos;ve hit the free limit. Upgrade to a paid membership for more usage.
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-sm text-zinc-400">
+              Your {PLAN_LABEL[limits.plan]} plan has no weekly or monthly token cap.
+            </p>
+          )}
+        </div>
       </div>
 
       <div className="rounded-xl text-white/90! border border-zinc-800 bg-zinc-900/50 p-6">

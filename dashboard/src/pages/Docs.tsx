@@ -39,18 +39,20 @@ const LANG: Record<string, string> = {
 };
 
 const KEY_PLACEHOLDER = '{API_KEY}';
+const DEFAULT_MODEL = 'deepseek-v4-flash';
+const API_BASE = 'https://chat.khain.app';
 
 const CODE: Record<string, string> = {
   Python: `import json
 import urllib.request
 
-url = "https://api.detroitllm.com/v1/chat/completions"
+url = "${API_BASE}/v1/chat/completions"
 headers = {
     "content-type": "application/json",
     "authorization": "Bearer ${KEY_PLACEHOLDER}",
 }
 body = json.dumps({
-    "model": "deepseek-v4-pro",
+    "model": "${DEFAULT_MODEL}",
     "max_tokens": 1024,
     "messages": [{"role": "user", "content": "Hello, Detroit LLM"}],
 }).encode()
@@ -58,7 +60,7 @@ body = json.dumps({
 req = urllib.request.Request(url, data=body, headers=headers)
 with urllib.request.urlopen(req) as res:
     print(res.read().decode())`,
-  TypeScript: `const url = "https://api.detroitllm.com/v1/chat/completions";
+  TypeScript: `const url = "${API_BASE}/v1/chat/completions";
 
 const res = await fetch(url, {
   method: "POST",
@@ -67,7 +69,7 @@ const res = await fetch(url, {
     authorization: "Bearer ${KEY_PLACEHOLDER}",
   },
   body: JSON.stringify({
-    model: "deepseek-v4-pro",
+    model: "${DEFAULT_MODEL}",
     max_tokens: 1024,
     messages: [{ role: "user", content: "Hello, Detroit LLM" }],
   }),
@@ -86,12 +88,12 @@ import (
 
 func main() {
     body, _ := json.Marshal(map[string]any{
-        "model":      "deepseek-v4-pro",
+        "model":      "${DEFAULT_MODEL}",
         "max_tokens": 1024,
         "messages":   []map[string]string{{"role": "user", "content": "Hello, Detroit LLM"}},
     })
 
-    req, _ := http.NewRequest("POST", "https://api.detroitllm.com/v1/chat/completions", bytes.NewBuffer(body))
+    req, _ := http.NewRequest("POST", "${API_BASE}/v1/chat/completions", bytes.NewBuffer(body))
     req.Header.Set("content-type", "application/json")
     req.Header.Set("authorization", "Bearer "+os.Getenv("DETROIT_API_KEY"))
 
@@ -112,14 +114,14 @@ public class Main {
     public static void main(String[] args) throws Exception {
         String body = """
             {
-              "model": "deepseek-v4-pro",
+              "model": "${DEFAULT_MODEL}",
               "max_tokens": 1024,
               "messages": [{"role": "user", "content": "Hello, Detroit LLM"}]
             }
             """;
 
         HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("https://api.detroitllm.com/v1/chat/completions"))
+                .uri(URI.create("${API_BASE}/v1/chat/completions"))
                 .header("content-type", "application/json")
                 .header("authorization", "Bearer " + System.getenv("DETROIT_API_KEY"))
                 .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -135,10 +137,10 @@ public class Main {
 require "net/http"
 require "uri"
 
-uri = URI("https://api.detroitllm.com/v1/chat/completions")
+uri = URI("${API_BASE}/v1/chat/completions")
 
 body = {
-  model: "deepseek-v4-pro",
+  model: "${DEFAULT_MODEL}",
   max_tokens: 1024,
   messages: [{ role: "user", content: "Hello, Detroit LLM" }],
 }
@@ -156,14 +158,14 @@ puts res.body`,
   PHP: `<?php
 
 $body = [
-    'model' => 'deepseek-v4-pro',
+    'model' => '${DEFAULT_MODEL}',
     'max_tokens' => 1024,
     'messages' => [
         ['role' => 'user', 'content' => 'Hello, Detroit LLM'],
     ],
 ];
 
-$ch = curl_init('https://api.detroitllm.com/v1/chat/completions');
+$ch = curl_init('/v1/chat/completions');
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
 curl_setopt($ch, CURLOPT_POST, true);
 curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($body));
@@ -185,7 +187,7 @@ var client = new HttpClient();
 var body = new StringContent(
     JsonSerializer.Serialize(new
     {
-        model = "deepseek-v4-pro",
+        model = "${DEFAULT_MODEL}",
         max_tokens = 1024,
         messages = new[] { new { role = "user", content = "Hello, Detroit LLM" } },
     }),
@@ -195,13 +197,13 @@ var body = new StringContent(
 
 client.DefaultRequestHeaders.Add("authorization", "Bearer " + Environment.GetEnvironmentVariable("DETROIT_API_KEY"));
 
-var res = await client.PostAsync("https://api.detroitllm.com/v1/chat/completions", body);
+var res = await client.PostAsync("${API_BASE}/v1/chat/completions", body);
 Console.WriteLine(await res.Content.ReadAsStringAsync());`,
-  cURL: `curl https://api.detroitllm.com/v1/chat/completions \\
+  cURL: `curl ${API_BASE}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${KEY_PLACEHOLDER}" \\
   -d '{
-    "model": "deepseek-v4-pro",
+    "model": "${DEFAULT_MODEL}",
     "messages": [
       {"role": "system", "content": "You are a helpful assistant."},
       {"role": "user", "content": "Hello!"}
@@ -212,7 +214,7 @@ Console.WriteLine(await res.Content.ReadAsStringAsync());`,
   }'`,
 };
 
-const responsesCurl = `curl https://api.detroitllm.com/v1/responses \\
+const responsesCurl = `curl ${API_BASE}/v1/responses \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${KEY_PLACEHOLDER}" \\
   -d '{
@@ -232,7 +234,7 @@ const responsesCurl = `curl https://api.detroitllm.com/v1/responses \\
     "stream": false
   }'`;
 
-function makeRenderer(apiKey: string | null) {
+function makeRenderer(highlightStrings: string[]) {
   return (props: any) => {
     const { rows, stylesheet, useInlineStyles } = props;
     const walk = (node: any): any => {
@@ -242,7 +244,7 @@ function makeRenderer(apiKey: string | null) {
         .map((c: any) => (typeof c === 'string' ? c : c.value ?? ''))
         .join('');
       const kids = Array.isArray(node.children) ? node.children.map(walk) : node.children;
-      const highlighted = apiKey && text.includes(apiKey);
+      const highlighted = highlightStrings.some((s) => s && text.includes(s));
       return {
         ...node,
         children: kids,
@@ -276,7 +278,21 @@ export default function Docs() {
 
   const codeText = CODE[activeTab] || CODE['cURL'];
   const displayCode = codeText.split(KEY_PLACEHOLDER).join(apiKey ?? '$DETROIT_API_KEY');
-  const copyText = displayCode;
+  const copyText =
+    activeTab === 'cURL'
+      ? (() => {
+          const jsonMatch = displayCode.match(/-d\s+'(.*)'\s*$/s);
+          if (jsonMatch) {
+            const json = jsonMatch[1].trim().replace(/\s+/g, ' ');
+            const url = (displayCode.match(/curl\s+(\S+)/) || [])[1] ?? '';
+            return `curl ${url} -H "Content-Type: application/json" -H "Authorization: Bearer ${apiKey ?? '$DETROIT_API_KEY'}" -d "${json.replace(/"/g, '\\"')}"`;
+          }
+          return displayCode
+            .split('\n')
+            .map((line) => line.trim().replace(/\\$/, '').trim())
+            .join(' ');
+        })()
+      : displayCode;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(copyText);
@@ -370,7 +386,7 @@ export default function Docs() {
                 lineHeight: '1.625',
               }}
               codeTagProps={{ style: { fontFamily: 'inherit' } }}
-              renderer={makeRenderer(apiKey)}
+              renderer={makeRenderer(apiKey ? [apiKey, DEFAULT_MODEL] : [DEFAULT_MODEL])}
             >
               {displayCode}
             </SyntaxHighlighter>
@@ -387,7 +403,7 @@ export default function Docs() {
           The Responses API is our OpenAI-compatible agentic endpoint — built for tool-calling loops
           (function calling, streaming deltas, and structured outputs) used by agent harnesses such as
           the OpenAI Agents SDK and Gemini CLI. Point your harness at{' '}
-          <code className="font-mono text-xs text-zinc-300">https://api.detroitllm.com/v1</code>.
+          <code className="font-mono text-xs text-zinc-300">{API_BASE}/v1</code>.
         </p>
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden">
           <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">

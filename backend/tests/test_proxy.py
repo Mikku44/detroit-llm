@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import httpx
+import pytest
 
 from backend.proxy.router import (
     _parse_usage_from_chunk,
@@ -27,7 +28,8 @@ from backend.proxy.router import (
 from backend.proxy.tokens import count_responses_input_tokens
 
 
-def test_non_member_key_rejected(client, non_member_user_id):
+def test_free_user_key_allowed_on_chat(client, non_member_user_id):
+    """Free-tier users may call the OpenAI-compatible API (mock response)."""
     from backend.auth.session import create_session_token
 
     token = create_session_token(non_member_user_id)
@@ -41,8 +43,144 @@ def test_non_member_key_rejected(client, non_member_user_id):
         json={"messages": [{"role": "user", "content": "hi"}]},
         headers={"Authorization": f"Bearer {created['key']}"},
     )
+    assert r.status_code == 200, r.text
+    assert r.json()["choices"][0]["message"]["content"]
+
+
+def test_free_user_key_allowed_on_responses(client, non_member_user_id):
+    """Free-tier users pass the access gate on /v1/responses; the missing
+    DeepSeek key is the only thing left to reject (503)."""
+    from backend.auth.session import create_session_token
+
+    token = create_session_token(non_member_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "free"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    r = client.post(
+        "/v1/responses",
+        json={"model": "deepseek-v4-flash", "input": "hi"},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 503
+    assert "no DeepSeek key" in r.text
+
+
+def test_free_user_key_allowed_on_anthropic(client, non_member_user_id):
+    """Free-tier users may call the Anthropic-compatible endpoint (mock response)."""
+    from backend.auth.session import create_session_token
+
+    token = create_session_token(non_member_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "free"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    r = client.post(
+        "/v1/messages",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 200, r.text
+    assert "content" in r.json()
+
+
+@pytest.mark.asyncio
+async def test_free_user_over_weekly_limit_rejected(client, non_member_user_id, db_session):
+    """Free-tier users are blocked once their weekly token budget runs out."""
+    from backend.auth.session import create_session_token
+    from backend.db.models import UsageLog
+
+    token = create_session_token(non_member_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "free"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    db_session.add_all(
+        [
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=60000, completion_tokens=0, total_tokens=60000),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=40000, completion_tokens=0, total_tokens=40000),
+        ]
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
     assert r.status_code == 403
-    assert "Membership required" in r.text
+    assert "Weekly limit reached" in r.text
+
+
+@pytest.mark.asyncio
+async def test_free_user_over_monthly_limit_rejected(client, non_member_user_id, db_session):
+    """Free-tier users are blocked once the monthly budget runs out, even if
+    the weekly window looks fine."""
+    from datetime import datetime, timedelta, timezone
+    from backend.auth.session import create_session_token
+    from backend.db.models import UsageLog
+
+    token = create_session_token(non_member_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "free"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db_session.add_all(
+        [
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=50000, completion_tokens=0, total_tokens=50000),
+            # 15 days ago: inside the 30-day window but outside the 7-day one.
+            UsageLog(
+                api_key_id=created["id"],
+                model="deepseek-v4-pro",
+                prompt_tokens=390000,
+                completion_tokens=0,
+                total_tokens=390000,
+                created_at=now - timedelta(days=15),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 403
+    assert "Monthly limit reached" in r.text
+
+
+@pytest.mark.asyncio
+async def test_free_user_below_weekly_limit_allowed(client, non_member_user_id, db_session):
+    """Free-tier users under the weekly/monthly budgets keep working."""
+    from backend.auth.session import create_session_token
+    from backend.db.models import UsageLog
+
+    token = create_session_token(non_member_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "free"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    db_session.add(
+        UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=100, completion_tokens=50, total_tokens=150)
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 200, r.text
 
 
 def test_session_token_rejected_on_v1_chat(client, non_member_user_id):
@@ -193,24 +331,6 @@ def test_responses_output_text_aggregates_items():
 def test_count_responses_input_tokens_string():
     assert count_responses_input_tokens("hello world") > 0
     assert count_responses_input_tokens("") == 0
-
-
-def test_responses_requires_member(client, non_member_user_id):
-    from backend.auth.session import create_session_token
-
-    token = create_session_token(non_member_user_id)
-    created = client.post(
-        "/admin/keys",
-        json={"name": "free"},
-        headers={"Authorization": f"Bearer {token}"},
-    ).json()
-    r = client.post(
-        "/v1/responses",
-        json={"model": "deepseek-v4-flash", "input": "hi"},
-        headers={"Authorization": f"Bearer {created['key']}"},
-    )
-    assert r.status_code == 403
-    assert "Membership required" in r.text
 
 
 def test_responses_unavailable_without_deepseek_key(client, api_key):
@@ -590,24 +710,6 @@ def test_anthropic_mock_stream(client, api_key):
     assert "event: content_block_delta" in body
     assert "event: message_delta" in body
     assert "event: message_stop" in body
-
-
-def test_anthropic_requires_member(client, non_member_user_id):
-    from backend.auth.session import create_session_token
-
-    token = create_session_token(non_member_user_id)
-    created = client.post(
-        "/admin/keys",
-        json={"name": "free"},
-        headers={"Authorization": f"Bearer {token}"},
-    ).json()
-    r = client.post(
-        "/v1/messages",
-        json={"messages": [{"role": "user", "content": "hi"}]},
-        headers={"Authorization": f"Bearer {created['key']}"},
-    )
-    assert r.status_code == 403
-    assert "Membership required" in r.text
 
 
 def test_anthropic_chunk_to_events_text():

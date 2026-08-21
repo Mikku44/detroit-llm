@@ -3,10 +3,11 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { api } from '../lib/api'
 import { useIsMobile } from '../hooks/use-mobile'
-import { LogOut, Key, BarChart3, LayoutDashboard, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard } from 'lucide-react'
+import { LogOut, Key, BarChart3, LayoutDashboard, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard, Cookie } from 'lucide-react'
 import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat } from 'react-icons/hi'
 import { ChatHistoryProvider, useChatHistory } from '../lib/chat-history'
 import Avatar from './Avatar'
+import { openCookiePreferences } from './CookieConsent'
 import { Marker, MarkerContent } from './ui/marker'
 import {
   Dialog,
@@ -222,6 +223,15 @@ function SidebarInner() {
             >
               <Activity size={16} />
               Status (Usage)
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                setMenuOpen(false)
+                openCookiePreferences()
+              }}
+            >
+              <Cookie size={16} />
+              Cookie settings
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem

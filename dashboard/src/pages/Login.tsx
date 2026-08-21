@@ -1,14 +1,18 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { api } from '../lib/api'
 import PixelBlast from '../components/PixelBlast'
 import SplitText from '../components/SplitText'
 import ClickSpark from '../components/ClickSpark'
+import { FaDiscord, FaFacebook } from 'react-icons/fa6'
+import { openCookiePreferences } from '../components/CookieConsent'
+import LoginConsentModal, { hasLegalConsent } from '../components/LoginConsentModal'
 
 export default function Login() {
   const { user, loading } = useAuth()
   const navigate = useNavigate()
+  const [consentOpen, setConsentOpen] = useState(false)
 
   useEffect(() => {
     if (!loading && user) navigate('/', { replace: true })
@@ -16,6 +20,15 @@ export default function Login() {
 
   if (loading) return <div className="flex h-screen items-center justify-center bg-zinc-950 text-zinc-500">Loading...</div>
   if (user) return null
+
+  const handleSignIn = (e: React.MouseEvent) => {
+    e.preventDefault()
+    if (hasLegalConsent()) {
+      window.location.href = api.userLoginUrl()
+    } else {
+      setConsentOpen(true)
+    }
+  }
 
   return (
     <ClickSpark sparkColor="#a78bfa" sparkSize={8} sparkRadius={20} sparkCount={10} duration={500}>
@@ -47,6 +60,7 @@ export default function Login() {
           <div className="flex flex-col items-center gap-4 w-full">
             <a
               href={api.userLoginUrl()}
+              onClick={handleSignIn}
               className="inline-flex items-center justify-center gap-3 rounded-lg bg-zinc-900/80 backdrop-blur-sm border border-zinc-700/50 px-8 py-3 text-sm font-medium text-zinc-100 hover:bg-zinc-800 transition-colors"
             >
               <svg width="20" height="20" viewBox="0 0 24 24">
@@ -61,6 +75,37 @@ export default function Login() {
             <p className="text-xs text-zinc-600">
               Only YouTube members of the linked channel get access.
             </p>
+          </div>
+
+          {/* Help & Support Section */}
+          <div className="flex flex-col items-center gap-4 w-full pt-4 border-t border-zinc-800/60">
+            <p className="text-xs font-medium text-zinc-500">Help & Support</p>
+            <div className="flex items-center gap-5">
+              <a
+                href="https://discord.gg/KuMVmcK3cC"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-center rounded-full border border-zinc-700/60 bg-zinc-900/60 p-2.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                title="Join our Discord"
+              >
+                <FaDiscord size={18} />
+              </a>
+              <a
+                href="https://www.facebook.com/khainapp"
+                target="_blank"
+                rel="noreferrer"
+                className="flex items-center justify-center rounded-full border border-zinc-700/60 bg-zinc-900/60 p-2.5 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-100"
+                title="Follow us on Facebook"
+              >
+                <FaFacebook size={18} />
+              </a>
+            </div>
+            <button
+              onClick={openCookiePreferences}
+              className="text-[11px] text-zinc-600 transition-colors hover:text-zinc-300"
+            >
+              Cookie settings
+            </button>
           </div>
 
         </div>
@@ -87,6 +132,7 @@ export default function Login() {
           />
         </div>
       </div>
+      <LoginConsentModal open={consentOpen} onOpenChange={setConsentOpen} />
     </ClickSpark>
   )
 }

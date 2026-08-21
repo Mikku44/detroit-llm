@@ -5,8 +5,10 @@ from pathlib import Path
 
 # Env must be set BEFORE any backend module is imported
 _DB_FILE = Path(tempfile.mkdtemp()) / "test_gateway.db"
+_CONV_DB_FILE = Path(tempfile.mkdtemp()) / "test_conversations.db"
 
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_DB_FILE}"
+os.environ["CONVERSATIONS_DB_URL"] = f"sqlite+aiosqlite:///{_CONV_DB_FILE}"
 os.environ["JWT_SECRET"] = "test-jwt-secret-1234567890-abcdefghijklmnopqrstuvwxyz"
 os.environ["RATE_LIMIT_PER_MINUTE"] = "3600"
 os.environ["DEEPSEEK_API_KEY"] = ""
@@ -27,12 +29,14 @@ from sqlalchemy.pool import NullPool
 from fastapi.testclient import TestClient
 
 from backend.main import app
-from backend.db.models import Base
-from backend.db.database import get_db
+from backend.db.models import Base, ConversationBase
+from backend.db.database import get_db, get_conversation_db
 from backend.auth.session import create_session_token
 
 TEST_DB_URL = os.environ["DATABASE_URL"]
+TEST_CONV_DB_URL = os.environ["CONVERSATIONS_DB_URL"]
 DB_FILE = _DB_FILE
+CONV_DB_FILE = _CONV_DB_FILE
 
 
 @pytest.fixture(scope="session")
@@ -49,18 +53,45 @@ def test_session_factory(test_engine):
 
 
 @pytest.fixture(scope="session")
-def client(test_session_factory):
+def conv_test_engine():
+    from sqlalchemy.ext.asyncio import create_async_engine as _cae
+    from sqlalchemy.pool import NullPool
+
+    engine = _cae(TEST_CONV_DB_URL, poolclass=NullPool)
+    yield engine
+    import asyncio
+    asyncio.run(engine.dispose())
+
+
+@pytest.fixture(scope="session")
+def conv_session_factory(conv_test_engine):
+    from sqlalchemy.ext.asyncio import async_sessionmaker as _asm
+
+    return _asm(conv_test_engine, expire_on_commit=False)
+
+
+@pytest.fixture(scope="session")
+def client(test_session_factory, conv_session_factory):
     from sqlalchemy import create_engine
 
     sync_engine = create_engine(f"sqlite:///{DB_FILE}")
     Base.metadata.create_all(sync_engine)
     sync_engine.dispose()
 
+    conv_sync_engine = create_engine(f"sqlite:///{CONV_DB_FILE}")
+    ConversationBase.metadata.create_all(conv_sync_engine)
+    conv_sync_engine.dispose()
+
     async def _override_get_db():
         async with test_session_factory() as session:
             yield session
 
+    async def _override_get_conversation_db():
+        async with conv_session_factory() as session:
+            yield session
+
     app.dependency_overrides[get_db] = _override_get_db
+    app.dependency_overrides[get_conversation_db] = _override_get_conversation_db
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()

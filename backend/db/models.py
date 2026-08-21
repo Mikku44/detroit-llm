@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from sqlalchemy import String, Integer, Boolean, DateTime, Text, ForeignKey, BigInteger
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from backend.db.database import Base
+from backend.db.database import Base, ConversationBase
 
 
 def _utcnow():
@@ -25,9 +25,6 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    conversations: Mapped[list["Conversation"]] = relationship(
-        back_populates="user", cascade="all, delete-orphan"
-    )
 
 
 class ApiKey(Base):
@@ -62,17 +59,17 @@ class UsageLog(Base):
     api_key: Mapped["ApiKey"] = relationship(back_populates="usage_logs")
 
 
-class Conversation(Base):
+class Conversation(ConversationBase):
     __tablename__ = "conversations"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False, index=True)
+    # Lives in the separate conversations DB; no FK to users.id (cross-DB).
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     title: Mapped[str] = mapped_column(String, default="New Chat")
     model: Mapped[str] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
-    user: Mapped["User"] = relationship(back_populates="conversations")
     messages: Mapped[list["ConversationMessage"]] = relationship(
         back_populates="conversation",
         cascade="all, delete-orphan",
@@ -80,7 +77,7 @@ class Conversation(Base):
     )
 
 
-class ConversationMessage(Base):
+class ConversationMessage(ConversationBase):
     __tablename__ = "conversation_messages"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -90,6 +87,7 @@ class ConversationMessage(Base):
     role: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(Text, default="")
     reasoning: Mapped[str] = mapped_column(Text, nullable=True)
+    encrypted: Mapped[bool] = mapped_column(Boolean, default=False)
     model: Mapped[str] = mapped_column(String, nullable=True)
     usage: Mapped[str] = mapped_column(Text, nullable=True)  # JSON-serialized
     attachments: Mapped[str] = mapped_column(Text, nullable=True)  # JSON-serialized
