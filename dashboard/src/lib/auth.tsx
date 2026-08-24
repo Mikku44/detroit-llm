@@ -9,6 +9,10 @@ interface User {
   youtube_channel_id?: string | null
   is_owner: boolean
   is_member: boolean
+  is_verified: boolean
+  is_paid: boolean
+  tier_id?: string | null
+  phone_number?: string | null
   created_at?: string
 }
 
@@ -35,6 +39,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       setLoading(false)
     }
+  }, [])
+
+  // Allow components to push fresh user data (e.g. after phone verification).
+  useEffect(() => {
+    const onUserUpdated = (e: Event) => {
+      const detail = (e as CustomEvent).detail
+      if (detail) setUser(detail)
+    }
+    window.addEventListener('auth:user-updated', onUserUpdated)
+    return () => window.removeEventListener('auth:user-updated', onUserUpdated)
   }, [])
 
   const setApiKey = async (key: string) => {

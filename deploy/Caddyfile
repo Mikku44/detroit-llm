@@ -1,0 +1,34 @@
+{
+	email your-email@example.com
+}
+
+chat.khain.app {
+	encode gzip
+	root * /srv
+
+	# API / auth / health -> FastAPI backend
+	handle /v1/* {
+		reverse_proxy backend:8000
+	}
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+	handle /admin/* {
+		reverse_proxy backend:8000
+	}
+	handle /auth/* {
+		reverse_proxy backend:8000
+	}
+	handle /health {
+		reverse_proxy backend:8000
+	}
+	handle /stripe/* {
+		reverse_proxy backend:8000
+	}
+
+	# SPA: serve existing files, fall back to index.html
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

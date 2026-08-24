@@ -2,3 +2,14 @@
 .env
 .env.*
 !.env.example
+
+# local data / secrets
+members.json
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+
+# compiled python (may embed secrets)
+__pycache__/
+*.pyc

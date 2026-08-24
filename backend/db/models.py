@@ -22,9 +22,20 @@ class User(Base):
     avatar_url: Mapped[str] = mapped_column(String, nullable=True)
     is_owner: Mapped[bool] = mapped_column(Boolean, default=False)
     is_member: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Verification flag. Defaults to True for now (phone verification is hidden).
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Verified phone number (from Firebase phone auth).
+    phone_number: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Direct Stripe subscription payer (separate from YouTube membership).
+    is_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Stripe subscription tier (nomad/dreamer/entrepreneur/angel) from webhook metadata.
+    tier_id: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     api_keys: Mapped[list["ApiKey"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    payments: Mapped[list["Payment"]] = relationship(back_populates="user")
 
 
 class ApiKey(Base):
@@ -57,6 +68,42 @@ class UsageLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     api_key: Mapped["ApiKey"] = relationship(back_populates="usage_logs")
+
+
+class ImageUsage(Base):
+    """One row per generated image, used to enforce per-tier monthly image quotas."""
+
+    __tablename__ = "image_usage"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String, index=True, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+
+class Payment(Base):
+    """Payment history from Stripe subscriptions and one-time payments."""
+
+    __tablename__ = "payments_history"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), index=True, nullable=False)
+    # Stripe identifiers.
+    stripe_customer_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    stripe_payment_intent_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    stripe_invoice_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Stripe Checkout session id.
+    checkout_session_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    # Tier purchased: nomad/dreamer/entrepreneur/angel.
+    tier_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    amount: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String, default="thb")
+    status: Mapped[str] = mapped_column(String, default="pending")  # pending | paid | failed | refunded | canceled
+    event_type: Mapped[str] = mapped_column(String, nullable=True)  # Stripe event that recorded this row
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+
+    user: Mapped["User"] = relationship(back_populates="payments")
 
 
 class Conversation(ConversationBase):

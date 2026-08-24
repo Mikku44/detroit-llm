@@ -123,6 +123,23 @@ async def non_member_user_id(db_session):
 
 
 @pytest_asyncio.fixture
+async def verified_free_user_id(db_session):
+    """A free-tier user who has verified their phone (is_verified=True)."""
+    from backend.db.models import User
+
+    user = User(
+        id=str(uuid.uuid4()),
+        google_email=f"free-verified-{uuid.uuid4().hex}@test.local",
+        is_member=False,
+        is_verified=True,
+        phone_number="+66812345678",
+    )
+    db_session.add(user)
+    await db_session.commit()
+    return user.id
+
+
+@pytest_asyncio.fixture
 async def owner_user_id(db_session):
     from backend.db.models import User
 

@@ -7,7 +7,7 @@ import SplitText from '../components/SplitText'
 import ClickSpark from '../components/ClickSpark'
 import { FaDiscord, FaFacebook } from 'react-icons/fa6'
 import { openCookiePreferences } from '../components/CookieConsent'
-import LoginConsentModal, { hasLegalConsent } from '../components/LoginConsentModal'
+import LoginConsentModal from '../components/LoginConsentModal'
 
 export default function Login() {
   const { user, loading } = useAuth()
@@ -23,11 +23,7 @@ export default function Login() {
 
   const handleSignIn = (e: React.MouseEvent) => {
     e.preventDefault()
-    if (hasLegalConsent()) {
-      window.location.href = api.userLoginUrl()
-    } else {
-      setConsentOpen(true)
-    }
+    setConsentOpen(true)
   }
 
   return (

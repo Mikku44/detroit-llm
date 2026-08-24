@@ -75,7 +75,7 @@ export function GlowImage({ className, src, alt, ...props }: GlowImageProps) {
             src={src}
             alt={alt ?? ''}
             onError={handleError}
-            className={cn('block max-h-[420px] max-w-full object-contain', className)}
+            className={cn('block max-h-[420px] max-w-full object-cover', className)}
             {...props}
           />
         </ImagePreview>

@@ -4,6 +4,7 @@ import json
 import re
 import time
 import asyncio
+from urllib.parse import unquote
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 
@@ -12,9 +13,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import settings
+from backend.config import settings, TIER_OPTIONS
 from backend.db.database import get_db
-from backend.db.models import UsageLog, ApiKey, User
+from backend.db.models import UsageLog, ApiKey, User, ImageUsage
 from backend.auth.middleware import require_api_key
 from backend.auth.session import require_session
 from backend.proxy.tokens import count_messages_tokens, count_text_tokens, count_responses_input_tokens
@@ -137,6 +138,64 @@ def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
+# Hard cap on any single streaming response. Prevents a misbehaving upstream
+# (or a stuck connection) from streaming forever and hanging the client.
+STREAM_MAX_SECONDS = 300
+STREAM_IDLE_SECONDS = 60
+_STREAM_WARNING = b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":0,"completion_tokens":0,"total_tokens":0}}\n\ndata: [DONE]\n\n'
+
+
+async def _deadline_wrapper(agen: AsyncGenerator[bytes, None], max_seconds: int = STREAM_MAX_SECONDS) -> AsyncGenerator[bytes, None]:
+    """Wrap an upstream SSE generator with a hard timeout.
+
+    - Global deadline: if the stream has run for more than `max_seconds` total,
+      force-finish.
+    - Idle deadline: if no chunk arrives within `STREAM_IDLE_SECONDS`, the
+      connection is likely stuck — force-finish.
+
+    Either way the client always receives a terminating `[DONE]`.
+    """
+    started = time.monotonic()
+    try:
+        while True:
+            remaining = started + max_seconds - time.monotonic()
+            if remaining <= 0:
+                yield _STREAM_WARNING
+                return
+            try:
+                chunk = await asyncio.wait_for(
+                    anext(agen),
+                    timeout=min(remaining, STREAM_IDLE_SECONDS),
+                )
+            except asyncio.TimeoutError:
+                yield _STREAM_WARNING
+                return
+            except StopAsyncIteration:
+                return
+            yield chunk
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # Never let an upstream error hang the client.
+        yield _STREAM_WARNING
+        return
+    finally:
+        await agen.aclose()
+
+
+def _safe_stream(agen_factory):
+    """Return a StreamingResponse whose body_iterator is deadline-protected.
+
+    Accepts a callable returning an async generator (so the generator is created
+    lazily inside the response), then wraps it with `_deadline_wrapper`.
+    """
+    async def _body():
+        agen = agen_factory()
+        async for chunk in _deadline_wrapper(agen):
+            yield chunk
+    return StreamingResponse(_body(), media_type="text/event-stream")
+
+
 def _chat_chunk_to_responses_events(chunk: bytes, output_text: list, tool_calls: list) -> list:
     """Translate chat-completions SSE chunk bytes into Responses API stream events."""
     events = []
@@ -251,7 +310,16 @@ async def require_access(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=403, detail="Membership required")
-    if user.is_member or user.is_owner:
+    if user.is_member or user.is_owner or user.is_paid:
+        return user_id
+
+    # Live membership check: even if the stored flag is stale (e.g. the user
+    # became a member after their last login), grant access now if their channel
+    # is on the freshest member list. No re-login required.
+    from backend.auth.members import is_member_channel
+    if user.youtube_channel_id and await is_member_channel(user.youtube_channel_id):
+        user.is_member = True
+        await db.commit()
         return user_id
 
     weekly_used, monthly_used = await _tier_usage(db, user_id)
@@ -266,6 +334,70 @@ async def require_access(
             detail="Monthly limit reached. Upgrade to a paid membership for more usage.",
         )
     return user_id
+
+
+FREE_MODEL_ONLY_MESSAGE = (
+    "Free tier only includes the flash model. "
+    "Upgrade to a paid membership for pro and other models."
+)
+
+
+def _is_flash_model(model: str) -> bool:
+    """True when the requested model (or its resolved upstream) is a flash model."""
+    if not model:
+        return False
+    resolved = _resolve_model(model)
+    return "flash" in model.lower() or "flash" in resolved.lower()
+
+
+async def _is_free_user(db: AsyncSession, user_id: str) -> bool:
+    from sqlalchemy import select
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        return True
+    if user.is_member or user.is_owner or user.is_paid:
+        return False
+    # Live membership check so newly-added members aren't treated as free.
+    from backend.auth.members import is_member_channel
+    if user.youtube_channel_id and await is_member_channel(user.youtube_channel_id):
+        user.is_member = True
+        await db.commit()
+        return False
+    return True
+
+
+async def _free_model_gate(db: AsyncSession, user_id: str, body: dict, default_model: str = "deepseek-v4-pro") -> str:
+    """Enforce that free-tier users only use the flash model. Returns the model to use.
+
+    Free users default to the flash model when none is specified; an explicit
+    non-flash model is rejected with 403. Member/owner users are unaffected.
+    Vision models (deepseek-v4-flash-vision-exp) require a paid/member tier.
+    """
+    model = body.get("model", default_model)
+
+    # Vision models are paid/member-only, even though their name contains "flash".
+    if model.lower() == "deepseek-v4-flash-vision-exp":
+        if await _is_free_user(db, user_id):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "deepseek-v4-flash-vision-exp is only available to paid members. "
+                    "Upgrade to a paid membership for vision access."
+                ),
+            )
+        return model
+
+    if _is_flash_model(model):
+        return model
+    if not await _is_free_user(db, user_id):
+        return model
+    if not body.get("model"):
+        model = "deepseek-v4-flash"
+        body["model"] = model
+        return model
+    raise HTTPException(status_code=403, detail=FREE_MODEL_ONLY_MESSAGE)
 
 
 async def _log_usage(
@@ -286,6 +418,66 @@ async def _log_usage(
         )
         db.add(log)
         await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Image generation quota (per-tier, monthly)
+# ---------------------------------------------------------------------------
+
+_IMAGE_QUOTA_BY_TIER = {t["id"]: t.get("image_quota", 0) for t in TIER_OPTIONS}
+
+# Owner + YouTube members are not limited by the Stripe tier table; treat them
+# like the top paid tier (practically unlimited quota).
+_MEMBER_IMAGE_QUOTA = 10_000
+
+
+async def _image_quota_for_user(db: AsyncSession, user_id: str) -> tuple[int, int]:
+    """Return (quota, used) images for the user's current tier this calendar month.
+
+    Tier resolution: owner/member -> unlimited-ish; paid Stripe users use their
+    stored tier_id (nomad/dreamer/entrepreneur/angel); everyone else -> free (2).
+    """
+    from sqlalchemy import func, select
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user and (user.is_owner or user.is_member):
+        quota = _MEMBER_IMAGE_QUOTA
+    elif user and user.is_paid:
+        quota = _IMAGE_QUOTA_BY_TIER.get(user.tier_id or "", _IMAGE_QUOTA_BY_TIER["free"])
+    else:
+        quota = _IMAGE_QUOTA_BY_TIER["free"]
+
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    month_start = now_naive.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    used_stmt = select(func.count(ImageUsage.id)).where(
+        ImageUsage.user_id == user_id, ImageUsage.created_at >= month_start
+    )
+    used = int((await db.execute(used_stmt)).scalar_one() or 0)
+    return quota, used
+
+
+async def _check_image_quota(db: AsyncSession, user_id: str):
+    """Raise 403 when the user has used their monthly image quota."""
+    quota, used = await _image_quota_for_user(db, user_id)
+    if quota <= 0:
+        raise HTTPException(
+            status_code=403,
+            detail="Image generation is not included in your plan. Upgrade to generate images.",
+        )
+    if used >= quota:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Monthly image quota reached ({used}/{quota}). "
+                "Upgrade to a higher tier for more images, or wait until next month."
+            ),
+        )
+
+
+async def _log_image_usage(db: AsyncSession, user_id: str, model: str):
+    db.add(ImageUsage(user_id=user_id, model=model))
+    await db.commit()
 
 
 async def _proxy_stream(
@@ -659,6 +851,13 @@ def _deepseek_headers() -> dict:
     }
 
 
+def _dashscope_headers() -> dict:
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.dashscope_api_key}",
+    }
+
+
 def fallback_prompt_tokens_for(messages: list) -> int:
     """Best-effort fallback token estimate for a raw messages list."""
     try:
@@ -980,8 +1179,12 @@ def _image_data_uri(prompt: str, model: str, size: str) -> str:
 
 
 _IMAGE_FETCH_TIMEOUT = 20
+_IMAGE_GEN_TIMEOUT = 120
 _UNSPLASH_SEARCH_API = "https://api.unsplash.com/search/photos"
 _LOREM_FLICKR_API = "https://loremflickr.com/{width}/{height}/{tags}"
+_DASHSCOPE_IMAGE_URL = (
+    "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+)
 
 
 def _parse_size(size: str) -> tuple[int, int]:
@@ -1038,27 +1241,103 @@ def _loremflickr_url(query: str, size: str, seed_text: str) -> str:
     return _LOREM_FLICKR_API.format(width=w, height=h, tags=tags) + f"?lock={_image_seed(seed_text) % 100000}"
 
 
+def _dashscope_image_size(size: str) -> str:
+    """Convert '1024x1024' to DashScope's '1024*1024' format."""
+    w, h = _parse_size(size)
+    return f"{w}*{h}"
+
+
+async def _dashscope_image(prompt: str, size: str) -> dict:
+    """Generate an image with DashScope z-image-turbo (real AI generation).
+
+    Calls the multimodal-generation API, downloads the returned image, and
+    returns {"ref": <data uri>, "kind": "data_uri"} so the rest of the gateway
+    (markdown embedding, b64 output, etc.) works unchanged.
+
+    The image is downloaded into a data URI instead of returning the temporary
+    OSS URL because those URLs are short-lived and would break saved chats.
+    """
+    if not settings.dashscope_api_key:
+        raise RuntimeError("DASHSCOPE_API_KEY not configured")
+
+    body = {
+        "model": "z-image-turbo",
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"text": prompt or "A beautiful scene"}],
+                }
+            ]
+        },
+        "parameters": {
+            "prompt_extend": False,
+            "size": _dashscope_image_size(size),
+        },
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.dashscope_api_key}",
+    }
+
+    async with httpx.AsyncClient(timeout=_IMAGE_GEN_TIMEOUT) as client:
+        resp = await client.post(_DASHSCOPE_IMAGE_URL, json=body, headers=headers)
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"DashScope image API error ({resp.status_code}): {resp.text[:300]}"
+            )
+        data = resp.json()
+
+    # Response: output.choices[0].message.content = [{image: <url>, text: ...}, ...]
+    choices = (data.get("output") or {}).get("choices") or []
+    content = (choices[0].get("message") or {}).get("content") or [] if choices else []
+    image_url = None
+    for part in content:
+        if isinstance(part, dict) and part.get("image"):
+            image_url = part["image"]
+            break
+    if not image_url:
+        raise RuntimeError("DashScope returned no image")
+
+    raw, ctype = await _download_image_bytes(image_url)
+    mime = ctype if ctype.startswith("image/") else "image/jpeg"
+    return {"ref": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}", "kind": "data_uri"}
+
+
 async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> dict:
     """Resolve the best available image source for `prompt`.
 
-    Returns {"ref": <https url or mock data uri>, "kind": "url" | "data_uri"}.
+    Returns {"ref": <https url or data uri>, "kind": "url" | "data_uri"}.
     Provider order (settings.image_provider):
+      - "dashscope": real AI generation via z-image-turbo (needs DASHSCOPE_API_KEY)
       - "unsplash": Unsplash Search API (needs UNSPLASH_ACCESS_KEY)
       - "loremflickr": free keyword API, no key required
-      - "auto": try unsplash -> loremflickr -> mock
+      - "auto": try dashscope -> unsplash -> loremflickr -> mock
       - "mock" (default): deterministic offline SVG, no network
     Any provider failure falls through to the next candidate, ending at mock.
     """
     provider = (settings.image_provider or "mock").strip().lower()
     if provider == "auto":
-        candidates = ("unsplash", "loremflickr", "mock")
+        candidates = ("dashscope", "unsplash", "loremflickr", "mock")
+    elif provider == "dashscope":
+        candidates = ("dashscope", "mock")
     elif provider in ("unsplash", "loremflickr"):
         candidates = (provider, "mock")
     else:
         candidates = ("mock",)
 
     for candidate in candidates:
-        if candidate == "unsplash":
+        if candidate == "dashscope":
+            if not settings.dashscope_api_key:
+                print("  [image] dashscope selected but DASHSCOPE_API_KEY is unset")
+            else:
+                try:
+                    ref = await _dashscope_image(prompt, size)
+                    print(f"  [image] dashscope z-image-turbo: {size}")
+                    return ref
+                except Exception as e:
+                    print(f"  [image] dashscope failed ({type(e).__name__}: {e})")
+        elif candidate == "unsplash":
             if not settings.unsplash_access_key:
                 print("  [image] unsplash selected but UNSPLASH_ACCESS_KEY is unset")
             else:
@@ -1115,14 +1394,30 @@ def _parse_image_toolcall(content: str) -> dict | None:
 
 
 def _stream_image_markdown(final_text: str, data_uri: str, created_time: int, model: str):
-    """Replay a fixed image-tool answer as a normal chat-completion SSE stream."""
+    """Replay a fixed image-tool answer as a normal chat-completion SSE stream.
+
+    The prose is streamed character-by-character for a natural typing effect,
+    but the (potentially huge) base64 image is emitted as a single delta chunk —
+    streaming it char-by-char would generate ~1.7M chunks for a 1.6MB data URI
+    and effectively hang the client.
+    """
     completion_id = f"chatcmpl-img-{created_time}"
     body_text = (final_text or "").strip()
     if not body_text:
         body_text = "สร้างรูปให้แล้วครับ"
+    image_markdown = f"![generated image]({data_uri})"
     if data_uri not in body_text:
-        body_text = body_text + f"\n\n![generated image]({data_uri})"
+        body_text = body_text + f"\n\n{image_markdown}"
     full_text = body_text
+
+    # Split text into the part before the image, the image markdown, and any tail.
+    idx = full_text.find(image_markdown)
+    if idx == -1:
+        text_part, img_part, tail = full_text, "", ""
+    else:
+        text_part = full_text[:idx]
+        img_part = image_markdown
+        tail = full_text[idx + len(image_markdown):]
 
     async def streaming_response():
         first_chunk = {
@@ -1135,7 +1430,29 @@ def _stream_image_markdown(final_text: str, data_uri: str, created_time: int, mo
         yield f"data: {json.dumps(first_chunk)}\n\n"
         await asyncio.sleep(0.05)
 
-        for char in full_text:
+        for char in text_part:
+            chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created_time,
+                "model": model,
+                "choices": [{"index": 0, "delta": {"content": char}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+            await asyncio.sleep(0.01)
+
+        # Emit the whole image markdown in one delta (not char-by-char).
+        if img_part:
+            chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created_time,
+                "model": model,
+                "choices": [{"index": 0, "delta": {"content": img_part}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+
+        for char in tail:
             chunk = {
                 "id": completion_id,
                 "object": "chat.completion.chunk",
@@ -1154,8 +1471,8 @@ def _stream_image_markdown(final_text: str, data_uri: str, created_time: int, mo
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             "usage": {
                 "prompt_tokens": 10,
-                "completion_tokens": len(full_text),
-                "total_tokens": 10 + len(full_text),
+                "completion_tokens": len(text_part) + len(tail) + 1,
+                "total_tokens": 10 + len(text_part) + len(tail) + 1,
             },
         }
         yield f"data: {json.dumps(final_chunk)}\n\n"
@@ -1206,11 +1523,15 @@ async def _proxy_image_tool_loop(
     created_time = int(time.time())
     last_text = _last_user_text(body.get("messages") or [])
 
+    # Enforce the per-tier monthly image quota before generating.
+    await _check_image_quota(db, user_id)
+
     # If no DeepSeek key, generate straight from the prompt (offline demo still works).
     if not settings.deepseek_api_key:
         prompt = last_text.strip()
         image_ref = await _image_source(prompt, model, "1024x1024", f"{prompt}|{model}|1024x1024")
         final_text = "สร้างรูปให้แล้วครับ (mock)"
+        await _log_image_usage(db, user_id, model)
         if is_stream:
             return StreamingResponse(
                 _stream_image_markdown(final_text, image_ref["ref"], created_time, model),
@@ -1366,6 +1687,7 @@ async def _proxy_image_tool_loop(
     if not completion_tokens:
         completion_tokens = count_text_tokens(final_text or "")
     await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+    await _log_image_usage(db, user_id, model)
 
     if is_stream:
         return StreamingResponse(
@@ -1374,6 +1696,250 @@ async def _proxy_image_tool_loop(
         )
     return JSONResponse(
         content=_json_image_completion(final_text, image_ref["ref"], created_time, model),
+        status_code=200,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Web search tool loop (DuckDuckGo HTML, no API key; mock fallback)
+# ---------------------------------------------------------------------------
+
+_WEB_SEARCH_TIMEOUT = 15
+_DDG_HTML_API = "https://html.duckduckgo.com/html/"
+_DDG_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
+
+
+def _strip_html(text: str) -> str:
+    return re.sub(r"<[^>]+>", "", text or "")
+
+
+def _html_unescape(text: str) -> str:
+    from html import unescape
+
+    return unescape(text or "")
+
+
+def _clean_ddg_url(url: str) -> str:
+    """Decode DuckDuckGo's redirect wrapper (`/l/?uddg=<encoded>`) to the real URL."""
+    url = (url or "").strip()
+    if "duckduckgo.com/l/" in url:
+        m = re.search(r"[?&]uddg=([^&]+)", url)
+        if m:
+            try:
+                url = unquote(m.group(1))
+            except Exception:
+                pass
+    if url.startswith("//"):
+        url = "https:" + url
+    return url
+
+
+def _parse_ddg_results(html_text: str, limit: int = 5) -> list[dict]:
+    """Extract {title, url, snippet} from a DuckDuckGo HTML results page."""
+    results: list[dict] = []
+    blocks = re.findall(r'<div class="result\b.*?</div>\s*</div>', html_text, re.DOTALL)
+    if not blocks:
+        blocks = re.findall(r'<div class="web-result\b.*?</div>\s*</div>', html_text, re.DOTALL)
+    for block in blocks:
+        link = re.search(r'class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.DOTALL)
+        if not link:
+            continue
+        url = _clean_ddg_url(link.group(1))
+        title = _html_unescape(_strip_html(link.group(2))).strip()
+        snippet_m = re.search(r'class="result__snippet"[^>]*>(.*?)</a>', block, re.DOTALL)
+        snippet = _html_unescape(_strip_html(snippet_m.group(1))).strip() if snippet_m else ""
+        if not title:
+            continue
+        results.append({"title": title, "url": url, "snippet": snippet})
+        if len(results) >= limit:
+            break
+    return results
+
+
+async def _web_search(query: str, limit: int = 5) -> list[dict]:
+    """Run a real web search against DuckDuckGo's HTML endpoint (no key needed)."""
+    if not query:
+        return []
+    async with httpx.AsyncClient(timeout=_WEB_SEARCH_TIMEOUT, follow_redirects=True) as client:
+        resp = await client.get(_DDG_HTML_API, params={"q": query}, headers={"User-Agent": _DDG_UA})
+        resp.raise_for_status()
+    return _parse_ddg_results(resp.text, limit)
+
+
+def _mock_web_results(query: str) -> list[dict]:
+    q = (query or "search").strip()
+    return [
+        {
+            "title": f"ผลการค้นหาจำลองสำหรับ \"{q}\"",
+            "url": "https://duckduckgo.com/?q=" + q.replace(" ", "+"),
+            "snippet": "Web search is running in mock mode — live results were unavailable.",
+        },
+    ]
+
+
+def _format_results(results: list[dict], header: str = "") -> str:
+    if not results:
+        return "_ไม่พบผลลัพธ์_"
+    lines: list[str] = []
+    if header:
+        lines.append(header)
+        lines.append("")
+    for i, r in enumerate(results, 1):
+        title = (r.get("title") or "Untitled").strip()
+        url = (r.get("url") or "").strip()
+        snippet = (r.get("snippet") or "").strip()
+        lines.append(f"{i}. [{title}]({url})" if url else f"{i}. {title}")
+        if snippet:
+            lines.append(f"   {snippet}")
+    return "\n".join(lines)
+
+
+def _stream_text(final_text: str, created_time: int, model: str, tag: str):
+    """Replay a fixed text answer as a normal chat-completion SSE stream."""
+    completion_id = f"chatcmpl-{tag}-{created_time}"
+    full_text = (final_text or "").strip() or "ไม่พบผลลัพธ์"
+
+    async def streaming_response():
+        first_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created_time,
+            "model": model,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}],
+        }
+        yield f"data: {json.dumps(first_chunk)}\n\n"
+        await asyncio.sleep(0.05)
+
+        for char in full_text:
+            chunk = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created_time,
+                "model": model,
+                "choices": [{"index": 0, "delta": {"content": char}, "finish_reason": None}],
+            }
+            yield f"data: {json.dumps(chunk)}\n\n"
+            await asyncio.sleep(0.01)
+
+        final_chunk = {
+            "id": completion_id,
+            "object": "chat.completion.chunk",
+            "created": created_time,
+            "model": model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": len(full_text),
+                "total_tokens": 10 + len(full_text),
+            },
+        }
+        yield f"data: {json.dumps(final_chunk)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return streaming_response()
+
+
+def _json_text_completion(final_text: str, created_time: int, model: str, tag: str) -> dict:
+    full_text = (final_text or "").strip() or "ไม่พบผลลัพธ์"
+    return {
+        "id": f"chatcmpl-{tag}-{created_time}",
+        "object": "chat.completion",
+        "created": created_time,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": full_text},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 10,
+            "completion_tokens": len(full_text),
+            "total_tokens": 10 + len(full_text),
+        },
+    }
+
+
+async def _proxy_web_search_loop(
+    db: AsyncSession,
+    user_id: str,
+    model: str,
+    body: dict,
+    is_stream: bool,
+    fallback_prompt_tokens: int,
+):
+    """Search the web for the user's latest question and synthesize an answer.
+
+    Fetches DuckDuckGo results, then (when a DeepSeek key is configured) asks the
+    model to compose a grounded answer with citations. Without a key it replays
+    the raw results as a markdown list.
+    """
+    created_time = int(time.time())
+    query = _last_user_text(body.get("messages") or []).strip()
+
+    results: list[dict] = []
+    try:
+        results = await _web_search(query)
+    except Exception as e:
+        print(f"  [web-search] failed ({type(e).__name__}: {e})")
+    if not results:
+        results = _mock_web_results(query)
+
+    if settings.deepseek_api_key:
+        synth_messages = (body.get("messages") or []) + [
+            {
+                "role": "user",
+                "content": (
+                    "Web search results for the user's latest question:\n\n"
+                    + _format_results(results)
+                    + "\n\nAnswer the user's question in their language, citing sources "
+                    "with markdown links. Base your answer only on the search results above. "
+                    "Keep it concise."
+                ),
+            }
+        ]
+        synth_body = dict(body)
+        synth_body["stream"] = False
+        synth_body.pop("tools", None)
+        synth_body.pop("tool_choice", None)
+        synth_body.pop("response_format", None)
+        synth_body.pop("image_gen", None)
+        synth_body.pop("web_search", None)
+        synth_body["messages"] = synth_messages
+
+        url = f"{settings.deepseek_url}/chat/completions"
+        async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+            resp = await client.post(url, json=synth_body, headers=_deepseek_headers())
+        if resp.status_code < 400:
+            data = resp.json()
+            final_text = ((data.get("choices") or [{}])[0].get("message", {}).get("content")) or ""
+            usage = data.get("usage") or {}
+            prompt_tokens = usage.get("prompt_tokens", 0) or fallback_prompt_tokens
+            completion_tokens = usage.get("completion_tokens", 0) or count_text_tokens(final_text)
+            await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+            if is_stream:
+                return StreamingResponse(
+                    _stream_text(final_text, created_time, model, "search"),
+                    media_type="text/event-stream",
+                )
+            return JSONResponse(
+                content=_json_text_completion(final_text, created_time, model, "search"),
+                status_code=200,
+            )
+
+    final_text = _format_results(results, header="ผลการค้นหา (web search):")
+    await _log_usage(db, user_id, model, fallback_prompt_tokens, count_text_tokens(final_text))
+    if is_stream:
+        return StreamingResponse(
+            _stream_text(final_text, created_time, model, "search"),
+            media_type="text/event-stream",
+        )
+    return JSONResponse(
+        content=_json_text_completion(final_text, created_time, model, "search"),
         status_code=200,
     )
 
@@ -1406,28 +1972,80 @@ async def web_chat_completions(
 
 
 async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
-    model = body.get("model", "deepseek-v4-pro")
+    model = await _free_model_gate(db, user_id, body)
     is_stream = body.get("stream", False)
     fallback_prompt_tokens = count_messages_tokens(body.get("messages") or [])
     created_time = int(time.time())
 
+    # Cap generation length so a misbehaving model can't run away forever.
+    if not body.get("max_tokens"):
+        body["max_tokens"] = 4096
+
+    # Custom gateway flags — pop them so they never reach an upstream provider.
+    image_gen = bool(body.get("image_gen"))
+    web_search = bool(body.get("web_search"))
+    body.pop("image_gen", None)
+    body.pop("web_search", None)
+
     # If the request contains images, route to Gemini (DeepSeek has no vision).
     if _has_image_content(body):
-        if not settings.gemini_api_key:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Vision is not configured on this gateway. "
-                    "Set GEMINI_API_KEY in the server environment to enable image chat."
-                ),
-            )
-        resp = await _proxy_to_gemini(db, user_id, body, is_stream, fallback_prompt_tokens)
-        return _with_log(resp, user_id, model, body.get("messages", []))
+        # deepseek-v4-flash-vision-exp is a DeepSeek vision model — send it upstream.
+        if model == "deepseek-v4-flash-vision-exp":
+            if not settings.deepseek_api_key:
+                raise HTTPException(
+                    status_code=503,
+                    detail="deepseek-v4-flash-vision-exp requires DEEPSEEK_API_KEY.",
+                )
+            resp = await _proxy_to_deepseek(db, user_id, model, body, is_stream, fallback_prompt_tokens)
+            return _with_log(resp, user_id, model, body.get("messages", []))
+        # Qwen (DashScope) and OpenRouter models have their own vision support —
+        # do NOT switch them to Gemini. They are proxied to their own upstreams
+        # below, where image content is passed through unchanged.
+        if model.lower().startswith("qwen") or model.lower() == "stealth/ox-alpha":
+            pass
+        else:
+            if not settings.gemini_api_key:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Vision is not configured on this gateway. "
+                        "Set GEMINI_API_KEY in the server environment to enable image chat."
+                    ),
+                )
+            resp = await _proxy_to_gemini(db, user_id, body, is_stream, fallback_prompt_tokens)
+            return _with_log(resp, user_id, model, body.get("messages", []))
 
-    # If the user (in context) asks to create an image, let DeepSeek tool-call our image tool.
-    if await _detect_image_intent(body.get("messages") or []):
+    # If the user explicitly toggled image gen, or (in context) asks to create an
+    # image, let DeepSeek tool-call our image tool.
+    if image_gen or await _detect_image_intent(body.get("messages") or []):
         print(f"  [image-intent] -> tool loop (prompt: {_last_user_text(body.get('messages') or [])[:100]!r})")
         resp = await _proxy_image_tool_loop(db, user_id, model, body, is_stream, fallback_prompt_tokens)
+        return _with_log(resp, user_id, model, body.get("messages", []))
+
+    # If web search is toggled on, run the search tool loop.
+    if web_search:
+        print(f"  [web-search] -> tool loop (query: {_last_user_text(body.get('messages') or [])[:100]!r})")
+        resp = await _proxy_web_search_loop(db, user_id, model, body, is_stream, fallback_prompt_tokens)
+        return _with_log(resp, user_id, model, body.get("messages", []))
+
+    # Qwen models route to Alibaba Cloud DashScope (OpenAI-compatible mode).
+    if model.lower().startswith("qwen"):
+        if not settings.dashscope_api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="Qwen models require DASHSCOPE_API_KEY. Set it in the server environment.",
+            )
+        resp = await _proxy_to_dashscope(db, user_id, model, body, is_stream, fallback_prompt_tokens)
+        return _with_log(resp, user_id, model, body.get("messages", []))
+
+    # OpenRouter models (e.g. stealth/ox-alpha) route to OpenRouter.
+    if model.lower() == "stealth/ox-alpha":
+        if not settings.openrouter_api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="stealth/ox-alpha requires OPENROUTER_API_KEY. Set it in the server environment.",
+            )
+        resp = await _proxy_to_openrouter(db, user_id, model, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, model, body.get("messages", []))
 
     # If a DeepSeek key is configured, proxy to the real DeepSeek API.
@@ -1616,9 +2234,26 @@ async def image_generations(
     if n < 1 or n > 10:
         raise HTTPException(status_code=400, detail="n must be between 1 and 10")
 
+    # Enforce the per-tier monthly image quota.
+    quota, used = await _image_quota_for_user(db, user_id)
+    count = min(n, 4)
+    if quota <= 0:
+        raise HTTPException(
+            status_code=403,
+            detail="Image generation is not included in your plan. Upgrade to generate images.",
+        )
+    if used + count > quota:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Monthly image quota would be exceeded ({used}/{quota} used, "
+                f"requesting {count}). Upgrade to a higher tier for more images."
+            ),
+        )
+
     created_time = int(time.time())
     refs = []
-    for i in range(min(n, 4)):
+    for i in range(count):
         seed_text = f"{prompt}|{model}|{size}|{i}"
         refs.append((seed_text, await _image_source(prompt, model, size, seed_text)))
 
@@ -1638,6 +2273,8 @@ async def image_generations(
     data[0]["revised_prompt"] = prompt
 
     await _log_usage(db, user_id, model, len(prompt.split()), 0)
+    for _ in range(count):
+        await _log_image_usage(db, user_id, model)
     return JSONResponse(
         content={"created": created_time, "data": data},
         status_code=200,
@@ -1654,21 +2291,34 @@ async def responses_api(
     body = await request.json()
     if not isinstance(body, dict) or not body:
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
-    model = body.get("model", "deepseek-v4-pro")
+    model = await _free_model_gate(db, user_id, body)
     is_stream = body.get("stream", False)
     fallback_prompt_tokens = count_responses_input_tokens(body.get("input") or "")
 
-    # If the request contains images, route to Gemini (DeepSeek has no vision).
+    # If the request contains images, route to Gemini (DeepSeek has no vision),
+    # unless the caller explicitly chose the DeepSeek vision model.
     if _responses_has_image(body.get("input")):
-        if not settings.gemini_api_key:
+        if model != "deepseek-v4-flash-vision-exp":
+            if not settings.gemini_api_key:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Vision is not configured on this gateway. "
+                        "Set GEMINI_API_KEY in the server environment to enable image chat."
+                    ),
+                )
+            return await _proxy_gemini_responses(db, user_id, body, is_stream, fallback_prompt_tokens)
+
+    # Qwen models route to Alibaba Cloud DashScope Responses endpoint.
+    if model.lower().startswith("qwen"):
+        if not settings.dashscope_api_key:
             raise HTTPException(
                 status_code=503,
-                detail=(
-                    "Vision is not configured on this gateway. "
-                    "Set GEMINI_API_KEY in the server environment to enable image chat."
-                ),
+                detail="Qwen models require DASHSCOPE_API_KEY. Set it in the server environment.",
             )
-        return await _proxy_gemini_responses(db, user_id, body, is_stream, fallback_prompt_tokens)
+        return await _proxy_dashscope_responses(
+            db, user_id, model, body, is_stream, fallback_prompt_tokens
+        )
 
     if not settings.deepseek_api_key:
         raise HTTPException(status_code=503, detail="Responses API unavailable: no DeepSeek key configured")
@@ -1702,7 +2352,7 @@ async def responses_api(
                     completion_tokens = count_text_tokens(completion_text)
                 await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
 
-        return StreamingResponse(deepseek_responses_stream(), media_type="text/event-stream")
+        return StreamingResponse(_deadline_wrapper(deepseek_responses_stream()), media_type="text/event-stream")
 
     else:
         async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
@@ -1779,7 +2429,7 @@ async def anthropic_messages(
     body = await request.json()
     if not isinstance(body, dict) or not body:
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
-    model = _resolve_model(body.get("model", "deepseek-v4-pro"))
+    model = _resolve_model(await _free_model_gate(db, user_id, body))
     is_stream = body.get("stream", False)
     payload = _anthropic_chat_payload(body)
     fallback_prompt_tokens = fallback_prompt_tokens_for(payload.get("messages") or [])
@@ -1934,7 +2584,7 @@ async def anthropic_messages(
                     completion_tokens = count_text_tokens("".join(meta["output_text"]))
                 await _log_usage(db, user_id, upstream_model, prompt_tokens, completion_tokens)
 
-        return StreamingResponse(anthropic_stream(), media_type="text/event-stream")
+        return StreamingResponse(_deadline_wrapper(anthropic_stream()), media_type="text/event-stream")
 
     async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
         resp = await client.post(url, json=payload, headers=headers)
@@ -2036,7 +2686,7 @@ async def _proxy_to_deepseek(
                     completion_tokens = count_text_tokens(completion_text)
                 await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
 
-        return StreamingResponse(deepseek_stream(), media_type="text/event-stream")
+        return StreamingResponse(_deadline_wrapper(deepseek_stream()), media_type="text/event-stream")
 
     else:
         async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
@@ -2056,6 +2706,201 @@ async def _proxy_to_deepseek(
                 completion_tokens,
             )
             return JSONResponse(content=data, status_code=resp.status_code)
+
+
+async def _proxy_to_dashscope(
+    db: AsyncSession,
+    user_id: str,
+    model: str,
+    body: dict,
+    is_stream: bool,
+    fallback_prompt_tokens: int,
+):
+    """Proxy a chat-completions request to Alibaba Cloud DashScope (Qwen).
+
+    DashScope's OpenAI-compatible endpoint lives at
+    {dashscope_url}/compatible-mode/v1/chat/completions and supports the same
+    SSE streaming shape as OpenAI/DeepSeek, so the existing stream passthrough
+    and usage parsing work unchanged.
+    """
+    url = f"{settings.dashscope_url}/compatible-mode/v1/chat/completions"
+    headers = _dashscope_headers()
+
+    if is_stream:
+        async def dashscope_stream():
+            prompt_tokens = 0
+            completion_tokens = 0
+            completion_text = ""
+            try:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                    async with client.stream("POST", url, json=body, headers=headers) as resp:
+                        if resp.status_code >= 400:
+                            error_body = await resp.aread()
+                            yield error_body
+                            return
+                        async for chunk in resp.aiter_bytes():
+                            usage = _parse_usage_from_chunk(chunk)
+                            if usage:
+                                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                                completion_tokens = usage.get("completion_tokens", completion_tokens)
+                            completion_text += _text_from_chunk(chunk)
+                            yield chunk
+            finally:
+                if not prompt_tokens:
+                    prompt_tokens = fallback_prompt_tokens
+                if not completion_tokens:
+                    completion_tokens = count_text_tokens(completion_text)
+                await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+
+        return StreamingResponse(_deadline_wrapper(dashscope_stream()), media_type="text/event-stream")
+
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        data = resp.json()
+        usage = data.get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens", 0) or fallback_prompt_tokens
+        completion_tokens = usage.get("completion_tokens", 0)
+        if not completion_tokens:
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            completion_tokens = count_text_tokens(content)
+        await _log_usage(
+            db,
+            user_id,
+            model,
+            prompt_tokens,
+            completion_tokens,
+        )
+        return JSONResponse(content=data, status_code=resp.status_code)
+
+
+def _openrouter_headers() -> dict:
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.openrouter_api_key}",
+        "HTTP-Referer": settings.dashboard_url,
+        "X-Title": "Detroit LLM Gateway",
+    }
+
+
+async def _proxy_to_openrouter(
+    db: AsyncSession,
+    user_id: str,
+    model: str,
+    body: dict,
+    is_stream: bool,
+    fallback_prompt_tokens: int,
+):
+    """Proxy a chat-completions request to OpenRouter.
+
+    OpenRouter exposes an OpenAI-compatible endpoint, so the existing stream
+    passthrough + usage parsing work unchanged.
+    """
+    url = f"{settings.openrouter_url}/chat/completions"
+    headers = _openrouter_headers()
+
+    if is_stream:
+        async def openrouter_stream():
+            prompt_tokens = 0
+            completion_tokens = 0
+            completion_text = ""
+            try:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                    async with client.stream("POST", url, json=body, headers=headers) as resp:
+                        if resp.status_code >= 400:
+                            error_body = await resp.aread()
+                            yield error_body
+                            return
+                        async for chunk in resp.aiter_bytes():
+                            usage = _parse_usage_from_chunk(chunk)
+                            if usage:
+                                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                                completion_tokens = usage.get("completion_tokens", completion_tokens)
+                            completion_text += _text_from_chunk(chunk)
+                            yield chunk
+            finally:
+                if not prompt_tokens:
+                    prompt_tokens = fallback_prompt_tokens
+                if not completion_tokens:
+                    completion_tokens = count_text_tokens(completion_text)
+                await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+
+        return StreamingResponse(_deadline_wrapper(openrouter_stream()), media_type="text/event-stream")
+
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        data = resp.json()
+        usage = data.get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens", 0) or fallback_prompt_tokens
+        completion_tokens = usage.get("completion_tokens", 0)
+        if not completion_tokens:
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            completion_tokens = count_text_tokens(content)
+        await _log_usage(
+            db,
+            user_id,
+            model,
+            prompt_tokens,
+            completion_tokens,
+        )
+        return JSONResponse(content=data, status_code=resp.status_code)
+
+
+async def _proxy_dashscope_responses(
+    db: AsyncSession,
+    user_id: str,
+    model: str,
+    body: dict,
+    is_stream: bool,
+    fallback_prompt_tokens: int,
+):
+    """Proxy a Responses API request to DashScope's compatible-mode endpoint."""
+    url = f"{settings.dashscope_url}/api/v2/apps/protocols/compatible-mode/v1/responses"
+    headers = _dashscope_headers()
+
+    if is_stream:
+        async def dashscope_responses_stream():
+            prompt_tokens = 0
+            completion_tokens = 0
+            completion_text = ""
+            try:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                    async with client.stream("POST", url, json=body, headers=headers) as resp:
+                        if resp.status_code >= 400:
+                            error_body = await resp.aread()
+                            yield error_body
+                            return
+                        async for chunk in resp.aiter_bytes():
+                            usage = _responses_usage_from_chunk(chunk)
+                            if usage:
+                                prompt_tokens = usage.get("input_tokens") or prompt_tokens
+                                completion_tokens = usage.get("output_tokens") or completion_tokens
+                            completion_text += _responses_text_from_chunk(chunk)
+                            yield chunk
+            finally:
+                if not prompt_tokens:
+                    prompt_tokens = fallback_prompt_tokens
+                if not completion_tokens:
+                    completion_tokens = count_text_tokens(completion_text)
+                await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+
+        return StreamingResponse(_deadline_wrapper(dashscope_responses_stream()), media_type="text/event-stream")
+
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        data = resp.json()
+        usage = data.get("usage") or {}
+        prompt_tokens = usage.get("input_tokens", 0) or fallback_prompt_tokens
+        completion_tokens = usage.get("output_tokens", 0)
+        if not completion_tokens:
+            completion_tokens = count_text_tokens(_responses_output_text(data))
+        await _log_usage(
+            db,
+            user_id,
+            model,
+            prompt_tokens,
+            completion_tokens,
+        )
+        return JSONResponse(content=data, status_code=resp.status_code)
 
 
 async def _proxy_to_gemini(
@@ -2099,7 +2944,7 @@ async def _proxy_to_gemini(
                     completion_tokens = count_text_tokens(completion_text)
                 await _log_usage(db, user_id, settings.gemini_model, prompt_tokens, completion_tokens)
 
-        return StreamingResponse(gemini_stream(), media_type="text/event-stream")
+        return StreamingResponse(_deadline_wrapper(gemini_stream()), media_type="text/event-stream")
 
     async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
         resp = await client.post(url, json=gemini_body, headers=headers)
@@ -2232,7 +3077,7 @@ async def _proxy_gemini_responses(
                     completion_tokens = count_text_tokens("".join(output_text))
                 await _log_usage(db, user_id, settings.gemini_model, prompt_tokens, completion_tokens)
 
-        return StreamingResponse(gemini_responses_stream(), media_type="text/event-stream")
+        return StreamingResponse(_deadline_wrapper(gemini_responses_stream()), media_type="text/event-stream")
 
     async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
         resp = await client.post(url, json=gemini_body, headers=headers)
@@ -2407,6 +3252,12 @@ async def list_models():
         {
             "object": "model",
             "type": "model",
+            "id": "deepseek-v4-flash-vision-exp",
+            "display_name": "deepseek-v4-flash-vision-exp",
+        },
+        {
+            "object": "model",
+            "type": "model",
             "id": "claude-sonnet-4-5",
             "display_name": "claude-sonnet-4-5",
         },
@@ -2439,6 +3290,18 @@ async def list_models():
             "type": "model",
             "id": "gemini-2.5-flash",
             "display_name": "gemini-2.5-flash",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "qwen3.7-flash",
+            "display_name": "qwen3.7-flash (DashScope)",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "stealth/ox-alpha",
+            "display_name": "stealth/ox-alpha (OpenRouter)",
         },
         {
             "object": "model",

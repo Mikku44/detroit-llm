@@ -30,6 +30,7 @@ interface Tier {
   net: string
   weekly: number
   monthly: number
+  image_quota?: number
   deepseek_cost: string
   profit: string
   margin: string
@@ -43,6 +44,8 @@ interface UsageLimits {
   monthly_limit: number | null
   weekly_used: number
   monthly_used: number
+  image_quota?: number
+  images_used?: number
   tiers: Tier[]
 }
 
@@ -313,6 +316,9 @@ export default function Usage() {
             <>
               <QuotaBar label="Tokens / week" used={limits.weekly_used} limit={limits.weekly_limit} />
               <QuotaBar label="Tokens / month" used={limits.monthly_used} limit={limits.monthly_limit} />
+              {limits.image_quota != null && (
+                <QuotaBar label="Images / month" used={limits.images_used ?? 0} limit={limits.image_quota} />
+              )}
               {(limits.weekly_used >= limits.weekly_limit ||
                 limits.monthly_used >= limits.monthly_limit) && (
                 <p className="text-xs text-red-400">
@@ -321,9 +327,14 @@ export default function Usage() {
               )}
             </>
           ) : (
-            <p className="text-sm text-zinc-400">
-              Your {PLAN_LABEL[limits.plan]} plan has no weekly or monthly token cap.
-            </p>
+            <>
+              <p className="text-sm text-zinc-400">
+                Your {PLAN_LABEL[limits.plan]} plan has no weekly or monthly token cap.
+              </p>
+              {limits.image_quota != null && (
+                <QuotaBar label="Images / month" used={limits.images_used ?? 0} limit={limits.image_quota} />
+              )}
+            </>
           )}
         </div>
       </div>

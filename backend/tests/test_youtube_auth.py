@@ -2,37 +2,37 @@ import asyncio
 import uuid
 
 import httpx
-from dotenv import dotenv_values
 
-from backend.auth.youtube import _persist_env, _is_owner, _fetch_member_channel_ids, YOUTUBE_MEMBERS_API
+from backend.auth.youtube import (
+    _persist_env,
+    _load_persisted_env,
+    _is_owner,
+    _fetch_member_channel_ids,
+    YOUTUBE_MEMBERS_API,
+)
 
 
 # --- _persist_env -------------------------------------------------------------
 
 
-def test_persist_env_adds_and_updates_keys(tmp_path, monkeypatch):
-    monkeypatch.setattr("backend.auth.youtube.BASE_DIR", tmp_path)
+def test_persist_env_writes_to_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr("backend.auth.youtube.settings.data_dir", str(tmp_path))
 
     _persist_env("OWNER_REFRESH_TOKEN", "tok-1")
-    assert (tmp_path / ".env").read_text(encoding="utf-8") == 'OWNER_REFRESH_TOKEN="tok-1"\n'
+    assert (tmp_path / "OWNER_REFRESH_TOKEN").read_text(encoding="utf-8") == "tok-1"
 
-    (tmp_path / ".env").write_text('OTHER=1\nOWNER_REFRESH_TOKEN="tok-1"\n', encoding="utf-8")
     _persist_env("OWNER_REFRESH_TOKEN", "tok-2")
-
-    text = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "OTHER=1" in text
-    assert 'OWNER_REFRESH_TOKEN="tok-2"' in text
+    assert (tmp_path / "OWNER_REFRESH_TOKEN").read_text(encoding="utf-8") == "tok-2"
     # atomic write leaves no temp files behind
     assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_persist_env_round_trips_problematic_values(tmp_path, monkeypatch):
-    monkeypatch.setattr("backend.auth.youtube.BASE_DIR", tmp_path)
+    monkeypatch.setattr("backend.auth.youtube.settings.data_dir", str(tmp_path))
     weird = 'tok-2"#weird\nvalue'
     _persist_env("OWNER_REFRESH_TOKEN", weird)
 
-    parsed = dotenv_values(tmp_path / ".env")
-    assert parsed["OWNER_REFRESH_TOKEN"] == weird
+    assert _load_persisted_env("OWNER_REFRESH_TOKEN") == weird
 
 
 # --- _fetch_member_channel_ids ------------------------------------------------
@@ -242,7 +242,9 @@ async def test_callback_happy_path_covers_existing_user(
         follow_redirects=False,
     )
     assert r1.status_code in (302, 303, 307)
-    assert "token=" in r1.headers["location"]
+    # Token must be in the URL fragment (#token=), never the query string.
+    assert "#token=" in r1.headers["location"]
+    assert "?token=" not in r1.headers["location"]
 
     # Second login for the same google_sub hits the update branch.
     r2 = client.get(

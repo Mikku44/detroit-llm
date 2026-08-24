@@ -28,11 +28,11 @@ from backend.proxy.router import (
 from backend.proxy.tokens import count_responses_input_tokens
 
 
-def test_free_user_key_allowed_on_chat(client, non_member_user_id):
+def test_free_user_key_allowed_on_chat(client, verified_free_user_id):
     """Free-tier users may call the OpenAI-compatible API (mock response)."""
     from backend.auth.session import create_session_token
 
-    token = create_session_token(non_member_user_id)
+    token = create_session_token(verified_free_user_id)
     created = client.post(
         "/admin/keys",
         json={"name": "free"},
@@ -47,12 +47,12 @@ def test_free_user_key_allowed_on_chat(client, non_member_user_id):
     assert r.json()["choices"][0]["message"]["content"]
 
 
-def test_free_user_key_allowed_on_responses(client, non_member_user_id):
+def test_free_user_key_allowed_on_responses(client, verified_free_user_id):
     """Free-tier users pass the access gate on /v1/responses; the missing
     DeepSeek key is the only thing left to reject (503)."""
     from backend.auth.session import create_session_token
 
-    token = create_session_token(non_member_user_id)
+    token = create_session_token(verified_free_user_id)
     created = client.post(
         "/admin/keys",
         json={"name": "free"},
@@ -67,11 +67,11 @@ def test_free_user_key_allowed_on_responses(client, non_member_user_id):
     assert "no DeepSeek key" in r.text
 
 
-def test_free_user_key_allowed_on_anthropic(client, non_member_user_id):
+def test_free_user_key_allowed_on_anthropic(client, verified_free_user_id):
     """Free-tier users may call the Anthropic-compatible endpoint (mock response)."""
     from backend.auth.session import create_session_token
 
-    token = create_session_token(non_member_user_id)
+    token = create_session_token(verified_free_user_id)
     created = client.post(
         "/admin/keys",
         json={"name": "free"},
@@ -87,12 +87,12 @@ def test_free_user_key_allowed_on_anthropic(client, non_member_user_id):
 
 
 @pytest.mark.asyncio
-async def test_free_user_over_weekly_limit_rejected(client, non_member_user_id, db_session):
+async def test_free_user_over_weekly_limit_rejected(client, verified_free_user_id, db_session):
     """Free-tier users are blocked once their weekly token budget runs out."""
     from backend.auth.session import create_session_token
     from backend.db.models import UsageLog
 
-    token = create_session_token(non_member_user_id)
+    token = create_session_token(verified_free_user_id)
     created = client.post(
         "/admin/keys",
         json={"name": "free"},
@@ -117,14 +117,14 @@ async def test_free_user_over_weekly_limit_rejected(client, non_member_user_id, 
 
 
 @pytest.mark.asyncio
-async def test_free_user_over_monthly_limit_rejected(client, non_member_user_id, db_session):
+async def test_free_user_over_monthly_limit_rejected(client, verified_free_user_id, db_session):
     """Free-tier users are blocked once the monthly budget runs out, even if
     the weekly window looks fine."""
     from datetime import datetime, timedelta, timezone
     from backend.auth.session import create_session_token
     from backend.db.models import UsageLog
 
-    token = create_session_token(non_member_user_id)
+    token = create_session_token(verified_free_user_id)
     created = client.post(
         "/admin/keys",
         json={"name": "free"},
@@ -158,12 +158,12 @@ async def test_free_user_over_monthly_limit_rejected(client, non_member_user_id,
 
 
 @pytest.mark.asyncio
-async def test_free_user_below_weekly_limit_allowed(client, non_member_user_id, db_session):
+async def test_free_user_below_weekly_limit_allowed(client, verified_free_user_id, db_session):
     """Free-tier users under the weekly/monthly budgets keep working."""
     from backend.auth.session import create_session_token
     from backend.db.models import UsageLog
 
-    token = create_session_token(non_member_user_id)
+    token = create_session_token(verified_free_user_id)
     created = client.post(
         "/admin/keys",
         json={"name": "free"},
@@ -208,6 +208,312 @@ def test_non_member_session_allowed_web_chat(client, non_member_user_id):
     )
     assert r.status_code == 200, r.text
     assert r.json()["choices"][0]["message"]["content"]
+
+
+def test_free_user_pro_model_rejected(client, verified_free_user_id):
+    """Free-tier users are blocked from non-flash models."""
+    from backend.auth.session import create_session_token
+
+    token = create_session_token(verified_free_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "free"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 403
+    assert "flash model" in r.text
+
+
+def test_free_user_vision_model_rejected(client, verified_free_user_id):
+    """deepseek-v4-flash-vision-exp is paid/member-only, not free."""
+    from backend.auth.session import create_session_token
+
+    token = create_session_token(verified_free_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "free"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "deepseek-v4-flash-vision-exp",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 403
+    assert "vision" in r.json()["detail"].lower()
+
+
+def test_member_can_use_vision_model(client, api_key):
+    """Members/owners may use deepseek-v4-flash-vision-exp (no model gate block)."""
+    r = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "deepseek-v4-flash-vision-exp",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    # The model gate passes for members, so the request proceeds (mock reply
+    # when no DeepSeek key is configured) instead of being 403'd.
+    assert r.status_code == 200, r.text
+
+
+def test_free_user_defaults_to_flash(client, verified_free_user_id):
+    """Free-tier users without a model are silently routed to the flash model."""
+    from backend.auth.session import create_session_token
+
+    token = create_session_token(verified_free_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "free"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_verified_free_user_allowed(client, verified_free_user_id):
+    """Verified free-tier users may use the API."""
+    from backend.auth.session import create_session_token
+
+    token = create_session_token(verified_free_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "free"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_member_ignores_verification(client, non_member_user_id):
+    """Members get access even without phone verification."""
+    from backend.auth.session import create_session_token
+    from backend.db.database import async_session
+    from backend.db.models import User
+    from sqlalchemy import select
+
+    import asyncio
+
+    async def make_member():
+        async with async_session() as db:
+            result = await db.execute(select(User).where(User.id == non_member_user_id))
+            user = result.scalar_one()
+            user.is_member = True
+            await db.commit()
+
+    asyncio.run(make_member())
+
+    token = create_session_token(non_member_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "member"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_member_can_use_pro_model(client, api_key):
+    """Member/owner users keep access to pro and other models."""
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 200, r.text
+
+
+def test_qwen_requires_dashscope_key(client, api_key, monkeypatch):
+    """Qwen models without a DashScope key fail with a clear 503."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "dashscope_api_key", "")
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "qwen3.7-flash", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 503
+    assert "DASHSCOPE_API_KEY" in r.text
+
+
+def test_qwen_routes_to_dashscope(client, api_key, monkeypatch):
+    """A qwen model request is proxied to the DashScope endpoint."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "dashscope_api_key", "test-key")
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "qwen reply", "role": "assistant"}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+            }
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class FakeDB:
+        async def execute(self, *a, **k):
+            return FakeResult()
+
+        async def commit(self):
+            pass
+
+        async def add(self, *a, **k):
+            pass
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["url"] = url
+            captured["body"] = json
+            return FakeResponse()
+
+    import backend.proxy.router as r
+    from backend.proxy.router import _handle_chat_completions
+
+    orig_http = r.httpx.AsyncClient
+    r.httpx.AsyncClient = lambda *a, **k: FakeClient()
+    try:
+        resp = asyncio.run(
+            _handle_chat_completions(
+                FakeDB(),
+                "u1",
+                {"model": "qwen3.7-flash", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+            )
+        )
+    finally:
+        r.httpx.AsyncClient = orig_http
+
+    assert captured["url"].endswith("/compatible-mode/v1/chat/completions")
+    assert captured["body"]["model"] == "qwen3.7-flash"
+    assert resp.status_code == 200
+
+
+def test_qwen_flash_is_free_tier_ok():
+    """qwen3.7-flash counts as a flash model, so free-tier users may use it."""
+    from backend.proxy.router import _is_flash_model
+
+    assert _is_flash_model("qwen3.7-flash") is True
+    assert _is_flash_model("qwen3.7-pro") is False
+
+
+def test_openrouter_requires_key(client, api_key, monkeypatch):
+    """stealth/ox-alpha without an OpenRouter key fails with a clear 503."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "openrouter_api_key", "")
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "stealth/ox-alpha", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 503
+    assert "OPENROUTER_API_KEY" in r.text
+
+
+def test_openrouter_routes_to_openrouter(client, api_key, monkeypatch):
+    """stealth/ox-alpha is proxied to the OpenRouter endpoint."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "openrouter_api_key", "test-key")
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "openrouter reply", "role": "assistant"}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+            }
+
+    class FakeUser:
+        id = "u1"
+        is_member = True
+        is_owner = False
+        is_paid = False
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return FakeUser()
+
+    class FakeDB:
+        async def execute(self, *a, **k):
+            return FakeResult()
+
+        async def commit(self):
+            pass
+
+        async def add(self, *a, **k):
+            pass
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["url"] = url
+            captured["body"] = json
+            captured["headers"] = headers
+            return FakeResponse()
+
+    import backend.proxy.router as r
+    from backend.proxy.router import _handle_chat_completions
+
+    orig_http = r.httpx.AsyncClient
+    r.httpx.AsyncClient = lambda *a, **k: FakeClient()
+    try:
+        resp = asyncio.run(
+            _handle_chat_completions(
+                FakeDB(),
+                "u1",
+                {"model": "stealth/ox-alpha", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+            )
+        )
+    finally:
+        r.httpx.AsyncClient = orig_http
+
+    assert captured["url"].endswith("/chat/completions")
+    assert "openrouter.ai" in captured["url"]
+    assert captured["body"]["model"] == "stealth/ox-alpha"
+    assert resp.status_code == 200
 
 
 def test_parse_usage_from_chunk():
@@ -361,6 +667,94 @@ def test_vision_requires_gemini_key(client, api_key):
     )
     assert r.status_code == 503
     assert "Vision is not configured" in r.text
+
+
+def test_qwen_vision_does_not_require_gemini(client, api_key, monkeypatch):
+    """Qwen image requests must NOT switch to Gemini.
+
+    Regression: an image request with a Qwen model previously fell into the
+    Gemini branch and 503'd without a Gemini key. Qwen should go to DashScope.
+    """
+    from backend.config import settings
+
+    # No Gemini key, so if the request were routed to Gemini it would 503.
+    monkeypatch.setattr(settings, "gemini_api_key", "")
+    monkeypatch.setattr(settings, "dashscope_api_key", "test-key")
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "ok", "role": "assistant"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1},
+            }
+
+    class FakeUser:
+        id = "u1"
+        is_member = True
+        is_owner = False
+        is_paid = False
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return FakeUser()
+
+    class FakeDB:
+        async def execute(self, *a, **k):
+            return FakeResult()
+
+        async def commit(self):
+            pass
+
+        async def add(self, *a, **k):
+            pass
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["url"] = url
+            return FakeResponse()
+
+    import backend.proxy.router as r
+    from backend.proxy.router import _handle_chat_completions
+
+    orig_http = r.httpx.AsyncClient
+    r.httpx.AsyncClient = lambda *a, **k: FakeClient()
+    try:
+        resp = asyncio.run(
+            _handle_chat_completions(
+                FakeDB(),
+                "u1",
+                {
+                    "model": "qwen3.7-flash",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "What is in this image?"},
+                                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+                            ],
+                        }
+                    ],
+                    "stream": False,
+                },
+            )
+        )
+    finally:
+        r.httpx.AsyncClient = orig_http
+
+    # Must go to DashScope, not Gemini.
+    assert captured["url"].endswith("/compatible-mode/v1/chat/completions")
+    assert "dashscope-intl" in captured["url"]
+    assert resp.status_code == 200
 
 
 def test_proxy_to_gemini_strips_deepseek_params(monkeypatch):
@@ -1125,3 +1519,176 @@ def test_loremflickr_url_with_non_ascii_prompt():
     assert url.startswith("https://loremflickr.com/1024/1024/nature?lock=")
     url2 = _loremflickr_url("a red fox in the snow", "512x512", "seed")
     assert url2.startswith("https://loremflickr.com/512/512/a-red-fox-in-the?lock=")
+
+
+def test_image_source_dashscope_without_key_falls_back_to_mock(monkeypatch):
+    from backend.proxy import router as proxy_router
+
+    monkeypatch.setattr(proxy_router.settings, "image_provider", "dashscope")
+    monkeypatch.setattr(proxy_router.settings, "dashscope_api_key", "")
+    result = asyncio.run(proxy_router._image_source("a cat", "dall-e-3", "512x512", "seed"))
+    assert result["kind"] == "data_uri"
+    assert result["ref"].startswith("data:image/svg+xml;base64,")
+
+
+def test_image_source_dashscope_returns_data_uri(monkeypatch):
+    from backend.proxy import router as proxy_router
+
+    async def fake_dashscope_image(prompt, size):
+        return {"ref": "data:image/png;base64,AAAB", "kind": "data_uri"}
+
+    monkeypatch.setattr(proxy_router.settings, "image_provider", "dashscope")
+    monkeypatch.setattr(proxy_router.settings, "dashscope_api_key", "sk-test")
+    monkeypatch.setattr(proxy_router, "_dashscope_image", fake_dashscope_image)
+    result = asyncio.run(proxy_router._image_source("a cat", "dall-e-3", "512x512", "seed"))
+    assert result["kind"] == "data_uri"
+    assert result["ref"].startswith("data:image/png;base64,")
+
+
+def test_dashscope_image_size_format():
+    from backend.proxy.router import _dashscope_image_size, _parse_size
+
+    assert _dashscope_image_size("1024x1024") == "1024*1024"
+    assert _dashscope_image_size("512x512") == "512*512"
+    assert _dashscope_image_size("") == "1024*1024"
+    assert _parse_size("1024*1024") == (1024, 1024)
+
+
+def test_stream_image_markdown_emits_image_in_few_chunks():
+    """A large base64 image must NOT be streamed char-by-char.
+
+    Regression: previously a 1.6MB data URI produced ~1.7M SSE chunks and hung
+    the client. Now the image markdown is emitted as a single delta.
+    """
+    from backend.proxy.router import _stream_image_markdown
+
+    uri = "data:image/png;base64," + "A" * 1_600_000
+    gen = _stream_image_markdown("สร้างรูปให้แล้วครับ", uri, 12345, "deepseek-v4-flash")
+
+    async def collect():
+        chunks = []
+        async for c in gen:
+            chunks.append(c)
+        return chunks
+
+    chunks = asyncio.run(collect())
+    # 1 first + 1 image delta + 1 final + 1 [DONE] (+ text chars, Thai text is short)
+    assert len(chunks) < 50, f"expected few chunks, got {len(chunks)}"
+    joined = "".join(c if isinstance(c, str) else c.decode(errors="replace") for c in chunks)
+    assert uri in joined  # the full image must be present
+    assert str(chunks[-1]).strip() == "data: [DONE]"
+
+
+async def _collect(agen):
+    chunks = []
+    async for c in agen:
+        chunks.append(c)
+    return chunks
+
+
+def test_deadline_wrapper_passes_through(monkeypatch):
+    from backend.proxy import router as proxy_router
+
+    async def gen():
+        yield b"data: one\n\n"
+        yield b"data: [DONE]\n\n"
+
+    chunks = asyncio.run(_collect(proxy_router._deadline_wrapper(gen(), max_seconds=30)))
+    assert chunks == [b"data: one\n\n", b"data: [DONE]\n\n"]
+
+
+def test_deadline_wrapper_ends_early_on_max_time(monkeypatch):
+    from backend.proxy import router as proxy_router
+
+    async def endless():
+        while True:
+            yield b"data: {}\n\n"
+            await asyncio.sleep(0.01)
+
+    monkeypatch.setattr(proxy_router, "STREAM_IDLE_SECONDS", 9999)
+    chunks = asyncio.run(_collect(proxy_router._deadline_wrapper(endless(), max_seconds=0.05)))
+    # Always ends (never hangs) and terminates with a [DONE].
+    assert chunks
+    assert b"[DONE]" in chunks[-1]
+
+
+def test_deadline_wrapper_ends_on_idle(monkeypatch):
+    from backend.proxy import router as proxy_router
+
+    async def stall_then_done():
+        yield b"data: hi\n\n"
+        await asyncio.sleep(5)
+
+    monkeypatch.setattr(proxy_router, "STREAM_IDLE_SECONDS", 0.05)
+    chunks = asyncio.run(_collect(proxy_router._deadline_wrapper(stall_then_done(), max_seconds=30)))
+    assert chunks
+    assert b"[DONE]" in chunks[-1]
+
+
+def test_deadline_wrapper_handles_upstream_exception(monkeypatch):
+    from backend.proxy import router as proxy_router
+
+    async def boom():
+        yield b"data: partial\n\n"
+        raise RuntimeError("upstream died")
+
+    chunks = asyncio.run(_collect(proxy_router._deadline_wrapper(boom(), max_seconds=30)))
+    assert chunks
+    assert b"[DONE]" in chunks[-1]
+
+
+def test_chat_completions_sets_max_tokens_default(client, api_key):
+    """A request without max_tokens gets a safe default cap applied."""
+    import backend.proxy.router as r
+
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "ok", "role": "assistant"}}],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+            }
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class FakeDB:
+        async def execute(self, *a, **k):
+            return FakeResult()
+
+        async def commit(self):
+            pass
+
+        async def add(self, *a, **k):
+            pass
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            captured["body"] = json
+            return FakeResponse()
+
+    orig_http = r.httpx.AsyncClient
+    orig_key = r.settings.deepseek_api_key
+    r.httpx.AsyncClient = lambda *a, **k: FakeClient()
+    r.settings.deepseek_api_key = "test-key"
+    try:
+        asyncio.run(
+            r._handle_chat_completions(
+                FakeDB(), "u1", {"model": "deepseek-v4-flash", "messages": [{"role": "user", "content": "hi"}]}
+            )
+        )
+    finally:
+        r.httpx.AsyncClient = orig_http
+        r.settings.deepseek_api_key = orig_key
+
+    assert captured["body"]["max_tokens"] == 4096

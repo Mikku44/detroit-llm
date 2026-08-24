@@ -1,0 +1,81 @@
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Values come from deploy/.env (DATABASE_URL / CONVERSATIONS_DB_URL).
+      # Default to Postgres on the `postgres` service if not overridden.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://detroit:detroit@postgres:5432/detroit}
+      CONVERSATIONS_DB_URL: ${CONVERSATIONS_DB_URL:-postgresql+asyncpg://detroit:detroit@postgres:5432/detroit_conversations}
+      # Persistent runtime data lives on the app-data volume.
+      DATA_DIR: /data
+    # No depends_on: backend uses `restart: unless-stopped` so it retries until
+    # the DB (managed cloud or the bundled selfhosted postgres) is reachable.
+    volumes:
+      - app-data:/data
+    expose:
+      - "8000"
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1.5G
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    # The bundled Postgres is optional — used for self-hosted installs. If you
+    # use a managed DB (e.g. Neon/Supabase), remove this service and set
+    # DATABASE_URL/CONVERSATIONS_DB_URL to your cloud URLs.
+    profiles: ["selfhosted"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-detroit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-detroit}
+      POSTGRES_DB: ${POSTGRES_DB:-detroit}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-detroit}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - backend
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    read_only: true
+
+volumes:
+  app-data:
+  pg-data:
+  caddy-data:
+  caddy-config:

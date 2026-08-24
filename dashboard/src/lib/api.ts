@@ -26,6 +26,9 @@ export const api = {
 
   me: () => request('/admin/me'),
 
+  verifyPhone: (phoneNumber: string) =>
+    request('/admin/me/phone', { method: 'POST', body: JSON.stringify({ phone_number: phoneNumber }) }),
+
   listKeys: () => request('/admin/keys'),
   createKey: (name: string = 'default', expires_at?: string) =>
     request('/admin/keys', { method: 'POST', body: JSON.stringify({ name, expires_at }) }),
@@ -40,9 +43,32 @@ export const api = {
 
   getUsageLimits: () => request('/admin/usage/limits'),
 
+  getPayments: () => request('/admin/payments'),
+
+  createCheckout: (tierId: string) => request('/stripe/checkout', { method: 'POST', body: JSON.stringify({ tier_id: tierId }) }),
+
+  checkoutStatus: (sessionId: string) => request(`/stripe/checkout/${sessionId}`),
+
+  getSubscription: () => request('/stripe/subscription'),
+
+  cancelSubscription: () => request('/stripe/subscription/cancel', { method: 'POST' }),
+
   listUsers: () => request('/admin/users'),
 
+  setUserVerified: (userId: string, isVerified: boolean) =>
+    request(`/admin/users/${userId}/verify`, { method: 'POST', body: JSON.stringify({ is_verified: isVerified }) }),
+
+  status: () => request('/admin/status'),
+
   verifyMembers: () => request('/auth/youtube/verify-members', { method: 'POST' }),
+
+  youtubeMembersStatus: () => request('/auth/youtube/status'),
+
+  getStoredMembers: () => request('/auth/youtube/members'),
+  setStoredMembers: (payload: any) => request('/auth/youtube/members', { method: 'POST', body: JSON.stringify(payload) }),
+  clearStoredMembers: () => request('/auth/youtube/members', { method: 'DELETE' }),
+
+  setStoredLevels: (payload: any) => request('/auth/youtube/levels', { method: 'POST', body: JSON.stringify(payload) }),
 
   listConversations: () => request('/api/conversations'),
   getConversation: (id: string) => request(`/api/conversations/${id}`),

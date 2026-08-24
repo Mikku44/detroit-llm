@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Get the directory where this settings.py file is located
@@ -9,8 +10,23 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./gateway.db"
     conversations_db_url: str = "sqlite+aiosqlite:///./conversations.db"
 
+    # Persistent data directory (members.json, owner refresh token, etc).
+    # In Docker this is mounted at /data. Defaults to ./data next to the repo.
+    data_dir: str = ""
+
     deepseek_url: str = "https://api.deepseek.com"
     deepseek_api_key: str = ""
+
+    # Alibaba Cloud DashScope (international) — Qwen models via OpenAI-compatible mode.
+    dashscope_url: str = "https://dashscope-intl.aliyuncs.com"
+    dashscope_api_key: str = ""
+
+    # OpenRouter — proxies many models via OpenAI-compatible API.
+    # Accepts both OPENROUTER_API_KEY and OPEN_ROUTER_API_KEY spellings.
+    openrouter_url: str = "https://openrouter.ai/api/v1"
+    openrouter_api_key: str = Field(
+        default="", validation_alias=AliasChoices("OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY")
+    )
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
@@ -23,20 +39,36 @@ class Settings(BaseSettings):
     owner_google_email: str = ""
     owner_refresh_token: str = ""
 
+    # Fallback member list: a JSON file holding member channel IDs. When the
+    # YouTube members API is unavailable (no OAuth permission in Google Cloud
+    # Console), membership checks read from this file instead.
+    members_json_path: str = ""
+
+    # Auto-sync: refresh the member list from YouTube and update user flags.
+    # Interval in seconds (default 5 min). Falls back to members_json_path.
+    members_sync_interval_seconds: int = 300
+
     jwt_secret: str = "change-me-to-a-random-secret"
     jwt_algorithm: str = "HS256"
+    # Optional separate key for encrypting sensitive values (e.g. raw API keys)
+    # at rest. If unset, derived from JWT_SECRET. Set a random 32+ char value.
+    encryption_key: str = ""
     session_ttl_seconds: int = 60 * 60 * 24 * 7
-
     dashboard_url: str = "http://localhost:5173"
     redirect_uri: str = "http://localhost:8000/auth/youtube/callback"
 
     members_url: str = ""
 
-    # Image generation provider: "loremflickr" (default, free, no key) | "unsplash" (needs access key) | "auto" | "mock" (offline)
-    image_provider: str = "loremflickr"
+    # Image generation provider: "auto" (dashscope -> unsplash -> loremflickr -> mock)
+    # | "dashscope" (real AI gen via z-image-turbo, needs DASHSCOPE_API_KEY)
+    # | "unsplash" (needs access key) | "loremflickr" (free) | "mock" (offline)
+    image_provider: str = "auto"
     unsplash_access_key: str = ""
 
     rate_limit_per_minute: int = 60
+
+    stripe_api_key: str = ""
+    stripe_webhook_secret: str = ""
 
     # Free-tier weekly/monthly token budget (total input+output tokens).
     free_weekly_tokens: int = 100000
@@ -61,6 +93,7 @@ TIER_OPTIONS = [
         "net": "0฿",
         "weekly": 100000,
         "monthly": 435000,
+        "image_quota": 2,
         "deepseek_cost": "1.13฿",
         "profit": "-1.13฿",
         "margin": "—",
@@ -73,6 +106,7 @@ TIER_OPTIONS = [
         "net": "35฿",
         "weekly": 500000,
         "monthly": 2170000,
+        "image_quota": 10,
         "deepseek_cost": "5.62฿",
         "profit": "29.38฿",
         "margin": "83.9%",
@@ -85,6 +119,7 @@ TIER_OPTIONS = [
         "net": "52.5฿",
         "weekly": 1000000,
         "monthly": 4350000,
+        "image_quota": 20,
         "deepseek_cost": "11.25฿",
         "profit": "41.25฿",
         "margin": "78.6%",
@@ -97,6 +132,7 @@ TIER_OPTIONS = [
         "net": "210฿",
         "weekly": 3000000,
         "monthly": 13040000,
+        "image_quota": 50,
         "deepseek_cost": "33.78฿",
         "profit": "176.22฿",
         "margin": "83.9%",
@@ -109,6 +145,7 @@ TIER_OPTIONS = [
         "net": "1,050฿",
         "weekly": 10000000,
         "monthly": 43450000,
+        "image_quota": 150,
         "deepseek_cost": "112.53฿",
         "profit": "937.47฿",
         "margin": "89.3%",
@@ -117,3 +154,24 @@ TIER_OPTIONS = [
 
 
 settings = Settings()
+
+
+def _assert_secure_secrets() -> None:
+    """Fail fast on insecure secret configuration.
+
+    Prevents running with a default/weak JWT secret, which would let anyone
+    forge dashboard session tokens.
+    """
+    weak = (
+        not settings.jwt_secret
+        or settings.jwt_secret == "change-me-to-a-random-secret"
+        or len(settings.jwt_secret) < 32
+    )
+    if weak:
+        raise RuntimeError(
+            "JWT_SECRET is missing or too weak. Set a strong random secret "
+            "(>= 32 chars) in backend/.env before starting."
+        )
+
+
+_assert_secure_secrets()

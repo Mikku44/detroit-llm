@@ -16,14 +16,6 @@ import {
 const CONSENT_KEY = 'dlg_legal_consent_v1'
 const LANG_KEY = 'dlg_legal_lang'
 
-export function hasLegalConsent(): boolean {
-  try {
-    return localStorage.getItem(CONSENT_KEY) === 'accepted'
-  } catch {
-    return false
-  }
-}
-
 export function recordLegalConsent() {
   try {
     localStorage.setItem(CONSENT_KEY, 'accepted')

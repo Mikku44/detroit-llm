@@ -1,4 +1,5 @@
 import logging
+import asyncio
 import time
 from contextlib import asynccontextmanager
 
@@ -10,9 +11,11 @@ from backend.config import settings
 from backend.db.database import init_db
 from backend.proxy.router import router as proxy_router
 from backend.auth.youtube import router as youtube_router
+from backend.auth.members import start_sync_task
 from backend.admin.router import router as admin_router
 from backend.chat.router import router as chat_router
 from backend.chat.conversations import router as conversations_router
+from backend.stripe.router import router as stripe_router
 from backend.ratelimit import SlidingWindowRateLimiter, bucket_key_for_token
 
 rate_limiter = SlidingWindowRateLimiter(limit=settings.rate_limit_per_minute)
@@ -24,7 +27,15 @@ async def lifespan(app: FastAPI):
     logging.getLogger("uvicorn.error").info(
         "Gemini vision configured: %s", bool(settings.gemini_api_key)
     )
-    yield
+    member_sync_task = await start_sync_task()
+    try:
+        yield
+    finally:
+        member_sync_task.cancel()
+        try:
+            await member_sync_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="Detroit LLM Gateway", version="0.1.0", lifespan=lifespan)
@@ -63,6 +74,7 @@ app.include_router(admin_router)
 app.include_router(proxy_router)
 app.include_router(chat_router)
 app.include_router(conversations_router)
+app.include_router(stripe_router)
 
 
 @app.get("/health")

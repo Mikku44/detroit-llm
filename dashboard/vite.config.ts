@@ -23,6 +23,7 @@ export default defineConfig({
       '/admin': { target: 'http://localhost:8000', agent: freshAgent },
       '/api': { target: 'http://localhost:8000', agent: freshAgent },
       '/v1': { target: 'http://localhost:8000', agent: freshAgent },
+      '/stripe': { target: 'http://localhost:8000', agent: freshAgent },
       '/health': { target: 'http://localhost:8000', agent: freshAgent },
     },
   },

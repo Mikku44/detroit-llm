@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
-import { FiSearch, FiCopy, FiCheck } from 'react-icons/fi';
+import { FiCopy, FiCheck } from 'react-icons/fi';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table';
 import { api } from '../lib/api';
@@ -234,6 +233,16 @@ const responsesCurl = `curl ${API_BASE}/v1/responses \\
     "stream": false
   }'`;
 
+const imageCurl = `curl ${API_BASE}/v1/images/generations \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${KEY_PLACEHOLDER}" \\
+  -d '{
+    "model": "z-image-turbo",
+    "prompt": "A stylish young woman in an all-black outfit standing in front of a vibrant cartoon mural wall, full-body portrait, high detail",
+    "size": "1024x1024",
+    "response_format": "url"
+  }'`;
+
 function makeRenderer(highlightStrings: string[]) {
   return (props: any) => {
     const { rows, stylesheet, useInlineStyles } = props;
@@ -444,6 +453,34 @@ export default function Docs() {
         </p>
       </section>
 
+      {/* Image generation */}
+      <section className="max-w-6xl w-full mx-auto">
+        <h2 className="text-2xl font-serif font-normal text-zinc-50 mb-2">Image generation</h2>
+        <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">
+          Generate images with <code className="font-mono">z-image-turbo</code> (Alibaba Cloud DashScope).
+          OpenAI-compatible <code className="font-mono">/v1/images/generations</code>, or via the chat
+          Image Gen toggle.
+        </p>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden">
+          <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-2.5">
+            <span className="font-mono text-xs text-zinc-400">POST /v1/images/generations</span>
+            <Button
+              onClick={() => navigator.clipboard.writeText(imageCurl)}
+              variant="ghost"
+              size="sm"
+              className="text-zinc-500 hover:text-zinc-300 h-7 px-2 text-xs"
+            >
+              <FiCopy className="mr-1" /> Copy
+            </Button>
+          </div>
+          <div className="text-sm leading-relaxed bg-zinc-900 overflow-x-auto">
+            <SyntaxHighlighter language="bash" style={vscDarkPlus} customStyle={{ margin: 0, padding: '1.5rem', background: 'transparent', fontSize: '0.875rem', lineHeight: '1.625' }} codeTagProps={{ style: { fontFamily: 'inherit' } }}>
+              {imageCurl}
+            </SyntaxHighlighter>
+          </div>
+        </div>
+      </section>
+
       {/* Explanation table */}
       <section className="max-w-6xl w-full mx-auto">
         <h2 className="text-2xl font-serif font-normal text-zinc-50 mb-4">API Reference</h2>
@@ -463,7 +500,7 @@ export default function Docs() {
             </TableHeader>
             <TableBody>
               {[
-                ['model', 'string', 'Yes', 'Model identifier, e.g. deepseek-v4-pro or deepseek-v4-flash.'],
+                ['model', 'string', 'Yes', 'Model identifier, e.g. deepseek-v4-pro, deepseek-v4-flash, or qwen3.7-flash.'],
                 ['max_tokens', 'integer', 'No', 'Maximum tokens to generate. Defaults to 1024.'],
                 ['messages', 'array<Message>', 'Yes', 'List of messages: { role, content }. Roles: system, user, assistant.'],
                 ['temperature', 'number', 'No', 'Sampling temperature between 0 and 2. Defaults to 1.0.'],
@@ -509,6 +546,38 @@ export default function Docs() {
               desc: 'DeepSeek V4 Flash — the fastest, lightweight model for everyday assistants, Q&A, and high-volume tasks.',
               ctx: '1M context',
               size: '304B parameters',
+              highlight: false,
+            },
+            {
+              id: 'deepseek-v4-flash-vision-exp',
+              tag: 'Vision',
+              desc: 'DeepSeek V4 Flash Vision (experimental) — image understanding and vision-powered Q&A on the fast flash backbone.',
+              ctx: '1M context',
+              size: '304B parameters',
+              highlight: false,
+            },
+            {
+              id: 'qwen3.7-flash',
+              tag: 'Fast',
+              desc: 'Qwen 3.7 Flash — fast, with optional thinking mode for stronger reasoning.',
+              ctx: '128K context',
+              size: '—',
+              highlight: false,
+            },
+            {
+              id: 'z-image-turbo',
+              tag: 'Image',
+              desc: 'z-image-turbo (Alibaba Cloud DashScope) — real AI image generation. Used by the image tool when you toggle Image Gen in chat.',
+              ctx: '1024×1024',
+              size: '—',
+              highlight: false,
+            },
+            {
+              id: 'stealth/ox-alpha',
+              tag: 'Reasoning',
+              desc: 'Ox Alpha is a stealth AI model that appeared in August 2026. It\'s a reasoning model designed for coding, sustained agentic work, and production workloads',
+              ctx: '—',
+              size: '—',
               highlight: false,
             },
           ].map((m) => (

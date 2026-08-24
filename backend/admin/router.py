@@ -2,13 +2,14 @@ from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, cast, Date
 
-from backend.db.database import get_db
-from backend.db.models import User, ApiKey, UsageLog
+from backend.config import settings, TIER_OPTIONS
+from backend.db.database import get_db, _is_postgres
+from backend.db.models import User, ApiKey, UsageLog, ImageUsage, Payment
 from backend.auth.session import require_session
 from backend.auth.api_keys import create_api_key_for_user, revoke_api_key
-from backend.config import settings, TIER_OPTIONS
+from backend.auth.key_encryption import decrypt_api_key
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -40,7 +41,70 @@ async def get_me(
         "youtube_channel_id": user.youtube_channel_id,
         "is_owner": user.is_owner,
         "is_member": user.is_member,
+        "is_verified": user.is_verified,
+        "is_paid": user.is_paid,
+        "tier_id": user.tier_id,
+        "phone_number": user.phone_number,
         "created_at": user.created_at.isoformat(),
+    }
+
+
+@router.post("/me/phone")
+async def verify_phone(
+    body: dict,
+    user_id: str = Depends(require_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save a phone number verified via Firebase phone auth.
+
+    Body: {"phone_number": "+66123456789"}
+    The phone number is already verified client-side by Firebase before this
+    call; here we just persist it and mark the user as verified.
+    """
+    phone = (body.get("phone_number") or "").strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="phone_number is required")
+
+    stmt = select(User).where(User.id == user_id)
+    result = await db.execute(stmt)
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.phone_number = phone
+    user.is_verified = True
+    await db.commit()
+    return {"phone_number": user.phone_number, "is_verified": user.is_verified}
+
+
+@router.get("/payments")
+async def list_payments(
+    user_id: str = Depends(require_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Payment history for the logged-in user."""
+    stmt = (
+        select(Payment)
+        .where(Payment.user_id == user_id)
+        .order_by(Payment.created_at.desc())
+    )
+    result = await db.execute(stmt)
+    payments = result.scalars().all()
+    return {
+        "payments": [
+            {
+                "id": p.id,
+                "tier_id": p.tier_id,
+                "amount": p.amount,
+                "currency": p.currency,
+                "status": p.status,
+                "event_type": p.event_type,
+                "checkout_session_id": p.checkout_session_id,
+                "subscription_id": p.stripe_subscription_id,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            }
+            for p in payments
+        ]
     }
 
 
@@ -57,7 +121,7 @@ async def list_keys(
             {
                 "id": k.id,
                 "key_prefix": k.key_prefix,
-                "key": k.raw_key or "",
+                "key": decrypt_api_key(k.raw_key) or "",
                 "name": k.name,
                 "is_active": k.is_active,
                 "expires_at": k.expires_at.isoformat() if k.expires_at else None,
@@ -121,7 +185,7 @@ async def get_usage_limits(
 
     if user.is_owner:
         plan = "owner"
-    elif user.is_member:
+    elif user.is_member or user.is_paid:
         plan = "member"
     else:
         plan = "free"
@@ -140,6 +204,20 @@ async def get_usage_limits(
     weekly_used = await sum_tokens_since(now_naive - timedelta(days=7))
     monthly_used = await sum_tokens_since(now_naive - timedelta(days=30))
 
+    # Monthly image quota (calendar month).
+    month_start = now_naive.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    image_stmt = select(func.count(ImageUsage.id)).where(
+        ImageUsage.user_id == user_id, ImageUsage.created_at >= month_start
+    )
+    images_used = int((await db.execute(image_stmt)).scalar_one() or 0)
+    if user.is_owner or user.is_member:
+        image_quota = 10000
+    elif user.is_paid:
+        tier_map = {t["id"]: t.get("image_quota", 0) for t in TIER_OPTIONS}
+        image_quota = tier_map.get(user.tier_id or "", tier_map["free"])
+    else:
+        image_quota = next(t.get("image_quota", 0) for t in TIER_OPTIONS if t["id"] == "free")
+
     is_free = plan == "free"
     return {
         "plan": plan,
@@ -149,6 +227,8 @@ async def get_usage_limits(
         "monthly_limit": settings.free_monthly_tokens if is_free else None,
         "weekly_used": weekly_used,
         "monthly_used": monthly_used,
+        "image_quota": image_quota,
+        "images_used": images_used,
         "tiers": TIER_OPTIONS,
     }
 
@@ -163,16 +243,21 @@ async def get_usage(
     start_date = (now_naive - timedelta(days=days - 1)).date()
     cutoff = datetime.combine(start_date, datetime.min.time())
 
+    if _is_postgres(settings.database_url):
+        date_expr = cast(UsageLog.created_at, Date).label("date")
+    else:
+        date_expr = func.date(UsageLog.created_at).label("date")
+
     stmt = (
         select(
-            func.date(UsageLog.created_at).label("date"),
+            date_expr,
             func.sum(UsageLog.prompt_tokens).label("prompt_tokens"),
             func.sum(UsageLog.completion_tokens).label("completion_tokens"),
             func.count(UsageLog.id).label("requests"),
         )
         .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
         .where(ApiKey.user_id == user_id, UsageLog.created_at >= cutoff)
-        .group_by(func.date(UsageLog.created_at))
+        .group_by(date_expr)
     )
     result = await db.execute(stmt)
     rows = result.fetchall()
@@ -205,10 +290,20 @@ async def get_usage_punchcard(
     start_date = (now_naive - timedelta(days=days - 1)).date()
     cutoff = datetime.combine(start_date, datetime.min.time())
 
+    if _is_postgres(settings.database_url):
+        # Postgres: EXTRACT(DOW) returns 0=Sunday..6=Saturday (same as %w),
+        # EXTRACT(HOUR) returns 0-23.
+        weekday_expr = func.extract("dow", UsageLog.created_at).label("weekday")
+        hour_expr = func.extract("hour", UsageLog.created_at).label("hour")
+    else:
+        # SQLite: strftime %w (0=Sunday) and %H (0-23).
+        weekday_expr = func.strftime("%w", UsageLog.created_at).label("weekday")
+        hour_expr = func.strftime("%H", UsageLog.created_at).label("hour")
+
     stmt = (
         select(
-            func.strftime("%w", UsageLog.created_at).label("weekday"),
-            func.strftime("%H", UsageLog.created_at).label("hour"),
+            weekday_expr,
+            hour_expr,
             func.count(UsageLog.id).label("count"),
         )
         .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
@@ -277,8 +372,155 @@ async def list_users(
                 "avatar_url": u.avatar_url,
                 "is_member": u.is_member,
                 "is_owner": u.is_owner,
+                "is_verified": u.is_verified,
+                "is_paid": u.is_paid,
                 "created_at": u.created_at.isoformat() if u.created_at else None,
             }
             for u in users
         ]
+    }
+
+
+@router.post("/users/{target_user_id}/verify")
+async def set_user_verified(
+    target_user_id: str,
+    body: dict,
+    user_id: str = Depends(require_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner-only: set or clear a user's manual verification flag.
+
+    Body: {"is_verified": true|false}
+    """
+    await _require_owner(user_id, db)
+    stmt = select(User).where(User.id == target_user_id)
+    result = await db.execute(stmt)
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    target.is_verified = bool(body.get("is_verified"))
+    await db.commit()
+    return {"id": target.id, "is_verified": target.is_verified}
+
+
+@router.get("/balances")
+async def get_provider_balances(
+    user_id: str = Depends(require_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner-only: live balance/credits for every configured upstream provider."""
+    await _require_owner(user_id, db)
+    from backend.admin.balances import check_provider_balances
+
+    providers = await check_provider_balances()
+    return {
+        "status": "ok",
+        "time": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "providers": providers,
+    }
+
+
+@router.get("/status")
+async def get_status(
+    user_id: str = Depends(require_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner-only status: upstream health, usage balance, users, and API keys."""
+    await _require_owner(user_id, db)
+
+    import httpx
+
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    today_start = now_naive.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    async def totals_since(cutoff) -> tuple[int, int]:
+        stmt = select(
+            func.coalesce(func.sum(UsageLog.total_tokens), 0),
+            func.count(UsageLog.id),
+        ).where(UsageLog.created_at >= cutoff)
+        r = await db.execute(stmt)
+        row = r.one()
+        return int(row[0] or 0), int(row[1] or 0)
+
+    today_total, today_requests = await totals_since(today_start)
+    week_total, week_requests = await totals_since(now_naive - timedelta(days=7))
+    month_total, month_requests = await totals_since(now_naive - timedelta(days=30))
+
+    total_users = int((await db.execute(select(func.count(User.id)))).scalar_one() or 0)
+    owners = int(
+        (await db.execute(select(func.count(User.id)).where(User.is_owner == True))).scalar_one() or 0
+    )
+    paid = int(
+        (
+            await db.execute(
+                select(func.count(User.id)).where(
+                    (User.is_member == True) | (User.is_owner == True) | (User.is_paid == True)
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    free_users = total_users - paid
+
+    total_keys = int((await db.execute(select(func.count(ApiKey.id)))).scalar_one() or 0)
+    active_keys = int(
+        (await db.execute(select(func.count(ApiKey.id)).where(ApiKey.is_active == True))).scalar_one() or 0
+    )
+
+    free_user_ids = select(User.id).where(
+        (User.is_member == False) & (User.is_owner == False) & (User.is_paid == False)
+    )
+
+    async def sum_free_since(cutoff) -> int:
+        stmt = (
+            select(func.coalesce(func.sum(UsageLog.total_tokens), 0))
+            .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
+            .where(ApiKey.user_id.in_(free_user_ids), UsageLog.created_at >= cutoff)
+        )
+        r = await db.execute(stmt)
+        return int(r.scalar_one() or 0)
+
+    free_week_used = await sum_free_since(now_naive - timedelta(days=7))
+    free_month_used = await sum_free_since(now_naive - timedelta(days=30))
+
+    sglang_ok = False
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            r = await client.get(f"{settings.sglang_url}/health")
+            sglang_ok = r.status_code == 200
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "version": "0.1.0",
+        "time": now_naive.isoformat(),
+        "health": {
+            "sglang": sglang_ok,
+            "members_url": settings.members_url,
+            "providers": {
+                "deepseek_configured": bool(settings.deepseek_api_key),
+                "gemini_configured": bool(settings.gemini_api_key),
+                "image_provider": settings.image_provider,
+            },
+        },
+        "balance": {
+            "today": {"tokens": today_total, "requests": today_requests},
+            "week": {"tokens": week_total, "requests": week_requests},
+            "month": {"tokens": month_total, "requests": month_requests},
+            "free_tier": {
+                "per_user_weekly_limit": settings.free_weekly_tokens,
+                "per_user_monthly_limit": settings.free_monthly_tokens,
+                "weekly_used": free_week_used,
+                "monthly_used": free_month_used,
+                "free_users": free_users,
+            },
+        },
+        "users": {
+            "total": total_users,
+            "owners": owners,
+            "members": paid - owners,
+            "free": free_users,
+        },
+        "api_keys": {"total": total_keys, "active": active_keys},
     }

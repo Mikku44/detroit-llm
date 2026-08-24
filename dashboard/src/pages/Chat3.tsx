@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { Markdown } from '../components/Markdown'
-import { FiSend, FiPlus, FiCopy, FiCheck, FiPaperclip, FiThumbsUp, FiThumbsDown, FiChevronDown, FiZap, FiX, FiArrowRight, FiFileText, FiClock } from 'react-icons/fi'
+import UpgradeDialog from '../components/UpgradeDialog'
+import { FiSend, FiPlus, FiCopy, FiCheck, FiPaperclip, FiThumbsUp, FiThumbsDown, FiChevronDown, FiZap, FiX, FiArrowRight, FiFileText, FiClock, FiImage, FiSearch } from 'react-icons/fi'
 import { useChatHistory } from '../lib/chat-history'
 import IOSLoading from '../components/ios-loading'
 
@@ -9,6 +10,7 @@ interface Cta {
   label: string
   href: string
   external?: boolean
+  action?: 'upgrade'
 }
 
 interface Attachment {
@@ -56,6 +58,16 @@ const MODEL_META: Record<string, ModelMeta> = {
     desc: 'Fast & lightweight — for daily use and quick Q&A',
     badges: ['fast'],
   },
+  'qwen3.7-flash': {
+    name: 'Qwen 3.7 Flash',
+    desc: 'Alibaba Qwen — fast, with thinking mode support',
+    badges: ['fast'],
+  },
+  'stealth/ox-alpha': {
+    name: 'Stealth Ox-Alpha',
+    desc: 'stealth/ox-alpha model',
+    badges: ['reasoning'],
+  },
   'gemini-2.5-flash': {
     name: 'Gemini 2.5 Flash',
     desc: 'Understands images & text',
@@ -79,11 +91,16 @@ const SUGGESTIONS = [
 const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'deepseek-v4-pro': 1000000,
   'deepseek-v4-flash': 1000000,
+  'qwen3.7-flash': 1000000,
   'gemini-2.5-flash': 1000000,
 }
 
 const DEFAULT_CONTEXT_LIMIT = 1000000
 const COMPACT_THRESHOLD = 0.85 // auto-compact when usage >= 85%
+
+// Anti-hang protection for streaming responses.
+const STREAM_MAX_MS = 300 * 1000 // hard cap: 5 minutes total
+const STREAM_IDLE_MS = 45 * 1000 // no data for 45s => assume stuck
 
 // Rough token estimate: ~4 chars per token (English-ish), images ~85 tokens.
 function estimateTextTokens(text: string): number {
@@ -151,7 +168,7 @@ function friendlyError(res: Response, raw: string, membersUrl: string): { conten
   if (res.status === 403) {
     return {
       content: 'Your account does not have access yet.',
-      cta: { label: 'Become a member', href: membersUrl || '#', external: true },
+      cta: { label: 'Become a member', href: membersUrl || '#', action: 'upgrade' },
     }
   }
   if (res.status === 429) {
@@ -284,11 +301,15 @@ export default function Chat3() {
   const [busy, setBusy] = useState(false)
   const [sessionToken, setSessionToken] = useState<string | null>(null)
   const [membersUrl, setMembersUrl] = useState('')
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
   const [model, setModel] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [modelOpen, setModelOpen] = useState(false)
+  const [freeTier, setFreeTier] = useState(false)
   const [thinking, setThinking] = useState(false)
+  const [imageGen, setImageGen] = useState(false)
+  const [webSearch, setWebSearch] = useState(false)
   const [effort, setEffort] = useState<'low' | 'high' | 'max'>('high')
   const [pending, setPending] = useState<Attachment[]>([])
   const [attaching, setAttaching] = useState(false)
@@ -341,6 +362,8 @@ export default function Chat3() {
       return
     }
     let cancelled = false
+    setHistoryLoaded(false)
+    setMessages([])
     getMessages(activeId)
       .then((msgs) => {
         if (cancelled) return
@@ -367,19 +390,31 @@ export default function Chat3() {
   }, [messages, busy, historyLoaded, model, activeId, saveConversation])
 
   useEffect(() => {
+    api
+      .me()
+      .then((me) => setFreeTier(!me.is_member && !me.is_owner && !me.is_paid))
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
     fetch('/v1/models')
       .then((r) => r.json())
       .then((d) => {
-        const list = (d?.data || [])
+        const all = (d?.data || [])
           .map((m: { id: string }) => m.id)
-          .filter((id: string) => /deepseek/i.test(id))
+          .filter((id: string) => /deepseek|qwen|stealth|ox-alpha|openrouter/i.test(id))
+        const list = freeTier
+          ? all.filter((id: string) => id.includes('flash') && !id.includes('vision'))
+          : all
         if (list.length) {
           setModels(list)
-          setModel((cur) => cur || list.find((id: string) => id.includes('flash')) || list[0])
+          setModel((cur) =>
+            cur && list.includes(cur) ? cur : list.find((id: string) => id.includes('flash')) || list[0]
+          )
         }
       })
       .catch(() => {})
-  }, [])
+  }, [freeTier])
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -489,8 +524,9 @@ export default function Chat3() {
     setInput('')
     setPending([])
     const hasImage = attachments.some((a) => a.kind === 'image')
-    const upstreamModel = hasImage ? 'gemini-2.5-flash' : model
-    setMessages((m) => [...m, { role: 'user', content: text, attachments, model }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
+    const requestModel = freeTier ? (model.includes('flash') ? model : 'deepseek-v4-flash') : model
+    const upstreamModel = hasImage ? 'gemini-2.5-flash' : requestModel
+    setMessages((m) => [...m, { role: 'user', content: text, attachments, model: requestModel }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
     setBusy(true)
     setIsVision(hasImage)
 
@@ -501,7 +537,7 @@ export default function Chat3() {
         content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
       }))
     const body: Record<string, unknown> = {
-      model,
+      model: requestModel,
       max_tokens: 1024,
       stream: true,
       messages: [...history, { role: 'user', content: buildContent(text, attachments) }],
@@ -514,6 +550,8 @@ export default function Chat3() {
         body['reasoning'] = { effort: 'none' }
       }
     }
+    if (imageGen) body['image_gen'] = true
+    if (webSearch) body['web_search'] = true
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -547,6 +585,8 @@ export default function Chat3() {
       let buffer = ''
       let logAcc = ''
       const startedAt = performance.now()
+      let lastChunkAt = performance.now()
+      let timedOut = false
       let respModel = ''
       let finishReason: string | null | undefined
       let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined
@@ -581,15 +621,29 @@ export default function Chat3() {
       }
 
       while (true) {
+        const now = performance.now()
+        if (now - startedAt > STREAM_MAX_MS) {
+          timedOut = true
+          abortRef.current?.abort()
+          break
+        }
+        if (now - lastChunkAt > STREAM_IDLE_MS) {
+          timedOut = true
+          abortRef.current?.abort()
+          break
+        }
         const { done, value } = await reader.read()
         if (done) break
+        lastChunkAt = performance.now()
         const decoded = decoder.decode(value, { stream: true })
         buffer += decoded
-        console.log('[Chat3 SSE chunk]', decoded)
+        if (decoded.length < 2000) {
+          console.log('[Chat3 SSE chunk]', decoded)
+        }
         buffer = parseSse(
           buffer,
           (c) => {
-            logAcc += c
+            if (logAcc.length < 2000) logAcc += c
             appendToLast('content', c)
           },
           (r) => {
@@ -604,6 +658,20 @@ export default function Chat3() {
       }
       console.log('[Chat3 response]', logAcc)
       patchLastMeta()
+      if (timedOut) {
+        setMessages((m) => {
+          const copy = [...m]
+          const idx = copy.length - 1
+          if (copy[idx]?.role === 'assistant') {
+            copy[idx] = {
+              ...copy[idx],
+              content: 'Response took too long and was stopped. Please try again or shorten your question.',
+              error: true,
+            }
+          }
+          return copy
+        })
+      }
     } catch (e) {
       const aborted = e instanceof DOMException && e.name === 'AbortError'
       setMessages((m) => {
@@ -685,6 +753,7 @@ export default function Chat3() {
   const isEmpty = messages.length === 0
 
   return (
+    <>
     <div className="flex flex-col flex-1 min-h-0">
       {/* Top bar */}
       <div className="flex items-center justify-between mb-2 px-1 shrink-0">
@@ -752,7 +821,13 @@ export default function Chat3() {
       </div>
 
       {/* Messages / empty state */}
-      <div className="flex-1 overflow-y-auto min-h-0">        {isEmpty ? (
+      <div className="flex-1 overflow-y-auto min-h-0">
+        {!historyLoaded ? (
+          <div className="h-full flex flex-col items-center justify-center gap-4 px-4">
+            <IOSLoading size={40} />
+            <p className="text-sm text-zinc-500">Loading conversation…</p>
+          </div>
+        ) : isEmpty ? (
           <div className="h-full flex flex-col items-center justify-center gap-8 px-4 pb-10">
             <h1 className="text-center text-2xl sm:text-3xl font-medium text-zinc-100">
               What can I help with?
@@ -835,14 +910,24 @@ export default function Chat3() {
                             {m.cta && (
                               <>
                                 {' '}
-                                <a
-                                  href={m.cta.href}
-                                  {...(m.cta.external ? { target: '_blank', rel: 'noreferrer' } : {})}
-                                  className="inline-flex items-center gap-1 font-semibold text-(--primary-color) underline underline-offset-4 transition-colors hover:text-red-100"
-                                >
-                                  {m.cta.label}
-                                  <FiArrowRight size={13} />
-                                </a>
+                                {m.cta.action === 'upgrade' ? (
+                                  <button
+                                    onClick={() => setUpgradeOpen(true)}
+                                    className="inline-flex items-center gap-1 font-semibold text-(--primary-color) underline underline-offset-4 transition-colors hover:text-red-100"
+                                  >
+                                    {m.cta.label}
+                                    <FiArrowRight size={13} />
+                                  </button>
+                                ) : (
+                                  <a
+                                    href={m.cta.href}
+                                    {...(m.cta.external ? { target: '_blank', rel: 'noreferrer' } : {})}
+                                    className="inline-flex items-center gap-1 font-semibold text-(--primary-color) underline underline-offset-4 transition-colors hover:text-red-100"
+                                  >
+                                    {m.cta.label}
+                                    <FiArrowRight size={13} />
+                                  </a>
+                                )}
                               </>
                             )}
                           </div>
@@ -1066,6 +1151,30 @@ export default function Chat3() {
             <FiZap size={12} />
             {thinking ? 'Thinking On' : 'Thinking Off'}
           </button>
+          <button
+            onClick={() => setImageGen((v) => !v)}
+            className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors ${
+              imageGen
+                ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
+                : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+            }`}
+            title="Toggle image generation"
+          >
+            <FiImage size={12} />
+            Image Gen
+          </button>
+          <button
+            onClick={() => setWebSearch((v) => !v)}
+            className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors ${
+              webSearch
+                ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
+                : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+            }`}
+            title="Toggle web search"
+          >
+            <FiSearch size={12} />
+            Web Search
+          </button>
           <div className="flex items-center gap-0.5 rounded-full border border-zinc-800 bg-zinc-900/50 p-0.5">
             {(['low', 'high', 'max'] as const).map((e) => (
               <button
@@ -1089,5 +1198,8 @@ export default function Chat3() {
         </p>
     </div>
     </div>
+
+    <UpgradeDialog open={upgradeOpen} onOpenChange={setUpgradeOpen} />
+    </>
   )
 }

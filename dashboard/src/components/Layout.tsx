@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
-import { api } from '../lib/api'
 import { useIsMobile } from '../hooks/use-mobile'
-import { LogOut, Key, BarChart3, LayoutDashboard, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard, Cookie } from 'lucide-react'
+import { LogOut, Key, BarChart3, LayoutDashboard, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard, Cookie, Users, CreditCard } from 'lucide-react'
 import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat } from 'react-icons/hi'
 import { ChatHistoryProvider, useChatHistory } from '../lib/chat-history'
 import Avatar from './Avatar'
+import UpgradeDialog from './UpgradeDialog'
+import MembersManagerDialog from './MembersManagerDialog'
+import PaymentsHistoryDialog from './PaymentsHistoryDialog'
 import { openCookiePreferences } from './CookieConsent'
 import { Marker, MarkerContent } from './ui/marker'
 import {
@@ -51,17 +53,50 @@ const links = [
   { to: '/docs', label: 'Docs', icon: HiOutlineBookOpen },
 ]
 
+const TIER_NAMES: Record<string, string> = {
+  free: 'Free',
+  nomad: 'Nomad',
+  dreamer: 'Dreamer',
+  entrepreneur: 'Entrepreneur',
+  angel: 'Angel',
+}
+
+function tierLabel(user: {
+  is_owner: boolean
+  is_member: boolean
+  is_paid: boolean
+  tier_id?: string | null
+}): { label: string; className: string } {
+  if (user.is_owner) {
+    return { label: 'Owner', className: 'bg-yellow-900/50 text-yellow-400' }
+  }
+  if (user.is_member) {
+    const tier = TIER_NAMES[user.tier_id ?? ''] 
+    return tier
+      ? { label: `Member · ${tier}`, className: 'bg-emerald-900/50 text-emerald-400' }
+      : { label: 'Member', className: 'bg-emerald-900/50 text-emerald-400' }
+  }
+  if (user.is_paid) {
+    const tier = TIER_NAMES[user.tier_id ?? '']
+    return tier
+      ? { label: tier, className: 'bg-sky-900/50 text-sky-400' }
+      : { label: 'Paid', className: 'bg-sky-900/50 text-sky-400' }
+  }
+  return { label: 'Free', className: 'bg-zinc-800 text-zinc-500' }
+}
+
 function SidebarInner() {
   const { user, logout } = useAuth()
   const navigate = useNavigate()
   const loc = useLocation()
   const [menuOpen, setMenuOpen] = useState(false)
   const [profileOpen, setProfileOpen] = useState(false)
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  const [membersOpen, setMembersOpen] = useState(false)
+  const [paymentsOpen, setPaymentsOpen] = useState(false)
   const { conversations, activeId, setActiveId, remove, refresh } = useChatHistory()
-  const [membersUrl, setMembersUrl] = useState('')
 
   useEffect(() => {
-    api.health().then((h) => setMembersUrl(h.members_url || '')).catch(() => {})
     refresh()
   }, [refresh])
 
@@ -157,7 +192,7 @@ function SidebarInner() {
         <DropdownMenuTrigger asChild>
           <button className="flex items-center gap-3 w-full text-left group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:px-0">
             <div
-              className="h-8 w-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-medium text-zinc-300 shrink-0 overflow-hidden cursor-pointer transition-opacity hover:opacity-80"
+              className="relative h-8 w-8 rounded-full bg-zinc-800 flex items-center justify-center text-sm font-medium text-zinc-300 shrink-0 overflow-visible cursor-pointer transition-opacity hover:opacity-80"
               title="View profile"
               onClick={(e) => {
                 e.stopPropagation()
@@ -166,24 +201,27 @@ function SidebarInner() {
               }}
             >
               <Avatar url={user?.avatar_url} name={user?.display_name} email={user?.email} className="h-full w-full rounded-full" />
+              {user && (
+                <span
+                  className={`hidden group-data-[collapsible=icon]:flex absolute -bottom-1 left-1/2 -translate-x-1/2 whitespace-nowrap 
+                    rounded-full px-1 py-px text-[7px] font-semibold leading-none ${tierLabel(user).className}`}
+                >
+                  {tierLabel(user).label.split('·').pop()?.trim()}
+                </span>
+              )}
             </div>
             <div className="flex-1 min-w-0 group-data-[collapsible=icon]:hidden">
               {user?.display_name && (
                 <div className="text-xs font-medium truncate flex items-center gap-1.5">
                   {user.display_name}
-                  {user.is_owner ? (
-                    <span className="rounded-full bg-yellow-900/50 text-yellow-400 text-[9px] px-1.5 py-0.5 font-medium">
-                      Owner
-                    </span>
-                  ) : user.is_member ? (
-                    <span className="rounded-full bg-emerald-900/50 text-emerald-400 text-[9px] px-1.5 py-0.5 font-medium">
-                      Member
-                    </span>
-                  ) : (
-                    <span className="rounded-full bg-zinc-800 text-zinc-500 text-[9px] px-1.5 py-0.5 font-medium">
-                      Free
-                    </span>
-                  )}
+                  {(() => {
+                    const t = tierLabel(user)
+                    return (
+                      <span className={`rounded-full ${t.className} text-[9px] px-1.5 py-0.5 font-medium`}>
+                        {t.label}
+                      </span>
+                    )
+                  })()}
                 </div>
               )}
               <div className="text-[11px] max-w-50 min-w-50 text-zinc-500 truncate">
@@ -202,19 +240,15 @@ function SidebarInner() {
             sideOffset={8}
             className="w-48"
           >
-            {membersUrl ? (
-              <DropdownMenuItem asChild>
-                <a href={membersUrl} target="_blank" rel="noreferrer">
-                  <ArrowUpRight size={16} />
-                  Upgrade
-                </a>
-              </DropdownMenuItem>
-            ) : (
-              <DropdownMenuItem>
-                <ArrowUpRight size={16} />
-                Upgrade
-              </DropdownMenuItem>
-            )}
+            <DropdownMenuItem
+              onClick={() => {
+                setMenuOpen(false)
+                setUpgradeOpen(true)
+              }}
+            >
+              <ArrowUpRight size={16} />
+              Upgrade
+            </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => {
                 setMenuOpen(false)
@@ -237,6 +271,36 @@ function SidebarInner() {
             <DropdownMenuItem
               onClick={() => {
                 setMenuOpen(false)
+                setPaymentsOpen(true)
+              }}
+            >
+              <CreditCard size={16} />
+              Payments
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => {
+                setMenuOpen(false)
+                setProfileOpen(true)
+              }}
+            >
+              <IdCard size={16} />
+              Profile Information
+            </DropdownMenuItem>
+            {user?.is_owner && (
+              <DropdownMenuItem
+                onClick={() => {
+                  setMenuOpen(false)
+                  setMembersOpen(true)
+                }}
+              >
+                <Users size={16} />
+                Members
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => {
+                setMenuOpen(false)
                 handleLogout()
               }}
               className="text-red-400 focus:text-red-400 focus:bg-red-950/50"
@@ -253,7 +317,14 @@ function SidebarInner() {
         open={profileOpen}
         onOpenChange={setProfileOpen}
         user={user}
-      />
+        onUpgrade={() => {
+          setProfileOpen(false)
+          setUpgradeOpen(true)
+        }}
+      />,
+      <UpgradeDialog key="upgrade-dialog" open={upgradeOpen} onOpenChange={setUpgradeOpen} />,
+      <MembersManagerDialog key="members-dialog" open={membersOpen} onOpenChange={setMembersOpen} />,
+      <PaymentsHistoryDialog key="payments-dialog" open={paymentsOpen} onOpenChange={setPaymentsOpen} />
   ]
 }
 
@@ -261,10 +332,12 @@ function ProfileDialog({
   open,
   onOpenChange,
   user,
+  onUpgrade,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
-  user: { id: string; email: string; display_name: string; avatar_url?: string; youtube_channel_id?: string | null; is_owner: boolean; is_member: boolean; created_at?: string } | null
+  user: { id: string; email: string; display_name: string; avatar_url?: string; youtube_channel_id?: string | null; is_owner: boolean; is_member: boolean; is_verified?: boolean; is_paid?: boolean; tier_id?: string | null; phone_number?: string | null; created_at?: string } | null
+  onUpgrade?: () => void
 }) {
   const { logout } = useAuth()
   const navigate = useNavigate()
@@ -274,8 +347,16 @@ function ProfileDialog({
   const plan = user.is_owner
     ? { label: 'Owner', className: 'bg-indigo-900/50 text-indigo-300' }
     : user.is_member
-      ? { label: 'Member', className: 'bg-emerald-900/50 text-emerald-400' }
-      : { label: 'Free', className: 'bg-zinc-800 text-zinc-500' }
+      ? {
+          label: TIER_NAMES[user.tier_id ?? ''] ? `Member · ${TIER_NAMES[user.tier_id ?? '']}` : 'Member',
+          className: 'bg-emerald-900/50 text-emerald-400',
+        }
+      : user.is_paid
+        ? {
+            label: TIER_NAMES[user.tier_id ?? ''] ?? 'Paid',
+            className: 'bg-sky-900/50 text-sky-400',
+          }
+        : { label: 'Free', className: 'bg-zinc-800 text-zinc-500' }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -296,7 +377,7 @@ function ProfileDialog({
           </div>
 
           <div className="text-center">
-            <div className="text-lg font-semibold text-zinc-100">
+            <div className="text-lg font-semibold text-zinc-100 flex items-center justify-center gap-1.5">
               {user.display_name || 'No display name'}
             </div>
             <div className="text-sm text-zinc-500">{user.email}</div>
@@ -334,6 +415,16 @@ function ProfileDialog({
           )}
         </div>
 
+        {!user.is_owner && !user.is_member && !user.is_paid && onUpgrade && (
+          <button
+            onClick={onUpgrade}
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-(--primary-color) px-8 py-3 text-sm font-medium text-(--primary-foreground) transition-opacity hover:opacity-90"
+          >
+            <ArrowUpRight size={16} />
+            Upgrade plan
+          </button>
+        )}
+
         <DialogFooter className="grid grid-cols-2 gap-2">
           <button
             onClick={() => {
@@ -362,6 +453,7 @@ function BottomNav() {
   const { user } = useAuth()
   const loc = useLocation()
   const [profileOpen, setProfileOpen] = useState(false)
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
 
   const item = (to: string, label: string, icon: React.ReactNode, end = false) => {
     const active = end ? loc.pathname === to : loc.pathname === to
@@ -404,7 +496,12 @@ function BottomNav() {
       open={profileOpen}
       onOpenChange={setProfileOpen}
       user={user}
+      onUpgrade={() => {
+        setProfileOpen(false)
+        setUpgradeOpen(true)
+      }}
     />,
+    <UpgradeDialog key="bottom-upgrade" open={upgradeOpen} onOpenChange={setUpgradeOpen} />,
   ]
 }
 

@@ -1,0 +1,16 @@
+**/__pycache__/
+**/*.pyc
+backend/gateway.db
+backend/conversations.db
+gateway.db
+conversations.db
+backend/.env
+backend/data/
+backend/tests/
+.pytest_cache/
+.vscode/
+.opencode/
+.git/
+dashboard/node_modules/
+dashboard/dist/
+deploy/.env

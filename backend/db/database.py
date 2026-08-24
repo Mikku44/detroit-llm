@@ -1,22 +1,30 @@
-from sqlalchemy import event
+from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
 from backend.config import settings
 
 
+def _is_postgres(url: str) -> bool:
+    return url.startswith("postgresql")
+
+
 def _make_engine(url: str):
+    if _is_postgres(url):
+        return create_async_engine(url, echo=False, pool_pre_ping=True)
     return create_async_engine(url, echo=False)
 
 
 def _set_sqlite_pragma(engine, url):
+    if not url.startswith("sqlite"):
+        return
+
     @event.listens_for(engine.sync_engine, "connect")
     def _listener(dbapi_connection, connection_record):
-        if url.startswith("sqlite"):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA journal_mode=WAL")
-            cursor.execute("PRAGMA synchronous=NORMAL")
-            cursor.close()
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.close()
 
 
 # Gateway DB: users, api keys, usage logs.
@@ -56,27 +64,104 @@ async def get_conversation_db() -> AsyncSession:
             await session.close()
 
 
-async def init_db():
-    async with engine.begin() as conn:
-        from backend.db.models import User, ApiKey, UsageLog
-        await conn.run_sync(Base.metadata.create_all)
-        from sqlalchemy import text
+async def _sqlite_alter(conn, column_defs: tuple[str, ...]) -> None:
+    """Best-effort column adds for SQLite (older databases missing columns)."""
+    for column_def in column_defs:
         try:
-            await conn.execute(text("ALTER TABLE api_keys ADD COLUMN raw_key VARCHAR"))
+            await conn.execute(text(column_def))
         except Exception:
             pass
+
+
+async def _postgres_alter(conn, columns: tuple[tuple[str, str], ...]) -> None:
+    """Add columns to Postgres only if they don't exist."""
+    for name, col_type in columns:
+        try:
+            await conn.execute(
+                text(
+                    "ALTER TABLE users ADD COLUMN {0} {1}".format(name, col_type)
+                    + " IF NOT EXISTS"
+                )
+            )
+        except Exception:
+            # Postgres supports ADD COLUMN IF NOT EXISTS, but keep this tolerant.
+            pass
+
+
+async def init_db():
+    async with engine.begin() as conn:
+        from backend.db.models import User, ApiKey, UsageLog, ImageUsage, Payment
+        await conn.run_sync(Base.metadata.create_all)
+
+        if settings.database_url.startswith("sqlite"):
+            try:
+                await conn.execute(text("ALTER TABLE api_keys ADD COLUMN raw_key VARCHAR"))
+            except Exception:
+                pass
+            await _sqlite_alter(
+                conn,
+                (
+                    "ALTER TABLE users ADD COLUMN is_paid BOOLEAN",
+                    "ALTER TABLE users ADD COLUMN stripe_customer_id VARCHAR",
+                    "ALTER TABLE users ADD COLUMN stripe_subscription_id VARCHAR",
+                    "ALTER TABLE users ADD COLUMN tier_id VARCHAR",
+                    "ALTER TABLE users ADD COLUMN is_verified BOOLEAN",
+                    "ALTER TABLE users ADD COLUMN phone_number VARCHAR",
+                ),
+            )
+        else:
+            await _postgres_alter(
+                conn,
+                (
+                    ("is_paid", "BOOLEAN"),
+                    ("stripe_customer_id", "VARCHAR"),
+                    ("stripe_subscription_id", "VARCHAR"),
+                    ("tier_id", "VARCHAR"),
+                    ("is_verified", "BOOLEAN"),
+                    ("phone_number", "VARCHAR"),
+                ),
+            )
 
     async with conversations_engine.begin() as conn:
         from backend.db.models import Conversation, ConversationMessage
         await conn.run_sync(ConversationBase.metadata.create_all)
-        from sqlalchemy import text
-        # Lightweight migrations for conversation tables created before these columns.
-        for column_def in (
-            "ALTER TABLE conversation_messages ADD COLUMN finish_reason VARCHAR",
-            "ALTER TABLE conversation_messages ADD COLUMN duration_ms INTEGER",
-            "ALTER TABLE conversation_messages ADD COLUMN encrypted BOOLEAN",
-        ):
+        if settings.conversations_db_url.startswith("sqlite"):
+            for column_def in (
+                "ALTER TABLE conversation_messages ADD COLUMN finish_reason VARCHAR",
+                "ALTER TABLE conversation_messages ADD COLUMN duration_ms INTEGER",
+                "ALTER TABLE conversation_messages ADD COLUMN encrypted BOOLEAN",
+            ):
+                try:
+                    await conn.execute(text(column_def))
+                except Exception:
+                    pass
+        else:
+            # Postgres: ensure columns exist if the table was created earlier.
             try:
-                await conn.execute(text(column_def))
+                cols = {
+                    r["column_name"]
+                    for r in (
+                        await conn.execute(
+                            text(
+                                "SELECT column_name FROM information_schema.columns "
+                                "WHERE table_name = 'conversation_messages'"
+                            )
+                        )
+                    ).fetchall()
+                }
+                for name, col_type in (
+                    ("finish_reason", "VARCHAR"),
+                    ("duration_ms", "INTEGER"),
+                    ("encrypted", "BOOLEAN"),
+                ):
+                    if name not in cols:
+                        try:
+                            await conn.execute(
+                                text(
+                                    f"ALTER TABLE conversation_messages ADD COLUMN {name} {col_type}"
+                                )
+                            )
+                        except Exception:
+                            pass
             except Exception:
                 pass

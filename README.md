@@ -49,10 +49,23 @@ cp .env.example .env
 #   GOOGLE_API_KEY
 #   OWNER_GOOGLE_EMAIL (your channel owner email)
 #   JWT_SECRET (generate a random one)
+#   DATABASE_URL / CONVERSATIONS_DB_URL (PostgreSQL recommended, SQLite ok for dev)
 
 # Start the gateway
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+#### Migrating from SQLite to PostgreSQL
+
+Set PostgreSQL URLs in `backend/.env`, then run (from the repo root):
+
+```bash
+python -m backend.db.migrate_to_postgres
+```
+
+This copies users, API keys, usage logs, image usage, and conversations from
+`gateway.db` / `conversations.db` into Postgres. Safe to re-run — rows whose
+primary key already exists are skipped.
 
 ### 3. Dashboard
 

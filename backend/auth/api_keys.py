@@ -7,6 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.models import ApiKey
+from backend.auth.key_encryption import encrypt_api_key
 
 
 def hash_api_key(raw_key: str) -> str:
@@ -41,12 +42,17 @@ async def create_api_key_for_user(
     expires_at: datetime | None = None,
 ) -> tuple[str, ApiKey]:
     raw_key, key_prefix, key_hash = generate_api_key()
-    
+
+    # Store naive UTC: the DB columns are TIMESTAMP WITHOUT TIME ZONE and
+    # Postgres/asyncpg rejects mixing timezone-aware and naive datetimes.
+    if expires_at is not None and expires_at.tzinfo is not None:
+        expires_at = expires_at.astimezone(timezone.utc).replace(tzinfo=None)
+
     entry = ApiKey(
         id=str(uuid.uuid4()),
         key_prefix=key_prefix,
         key_hash=key_hash,
-        raw_key=raw_key,
+        raw_key=encrypt_api_key(raw_key),
         user_id=user_id,
         name=name,
         expires_at=expires_at,

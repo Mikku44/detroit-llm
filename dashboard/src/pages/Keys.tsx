@@ -75,8 +75,6 @@ export default function Keys() {
   const [visibleKeys, setVisibleKeys] = useState<Record<string, boolean>>({})
   const [backedUp, setBackedUp] = useState(false)
   const [copied, setCopied] = useState(false)
-  const [newKeyName, setNewKeyName] = useState('default')
-  const [newKeyExpirationDays, setNewKeyExpirationDays] = useState(30)
   const [loading, setLoading] = useState(true)
 
   const loadKeys = () => {
@@ -97,30 +95,11 @@ export default function Keys() {
         : undefined
       const d = await api.createKey(createName || 'default', expires_at)
       setNewKey(d.key)
-      setNewKeyName(createName || 'default')
-      setNewKeyExpirationDays(expirationDays)
       setBackedUp(false)
       setCopied(false)
       setShowCreateDialog(false)
       setCreateName('')
       setExpirationDays(30)
-      loadKeys()
-    } catch (e: any) {
-      toast.error(e.message)
-    }
-    setCreating(false)
-  }
-
-  const handleRegenerate = async () => {
-    setCreating(true)
-    try {
-      const expires_at = newKeyExpirationDays > 0
-        ? new Date(Date.now() + newKeyExpirationDays * 86400000).toISOString()
-        : undefined
-      const d = await api.createKey(newKeyName, expires_at)
-      setNewKey(d.key)
-      setBackedUp(false)
-      setCopied(false)
       loadKeys()
     } catch (e: any) {
       toast.error(e.message)

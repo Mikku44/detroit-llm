@@ -2,12 +2,13 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { api } from '../lib/api'
+import UpgradeDialog from '../components/UpgradeDialog'
 import PixelBlast from '../components/PixelBlast'
 import SplitText from '../components/SplitText'
 import ClickSpark from '../components/ClickSpark'
 import IOSLoading from '../components/ios-loading'
 
-function PlanBadge({ isOwner, isMember }: { isOwner: boolean; isMember: boolean }) {
+function PlanBadge({ isOwner, isMember, isPaid }: { isOwner: boolean; isMember: boolean; isPaid: boolean }) {
   if (isOwner) {
     return (
       <span className="rounded-full bg-yellow-900/50 text-yellow-400 text-xs px-3 py-1 font-medium">
@@ -22,6 +23,13 @@ function PlanBadge({ isOwner, isMember }: { isOwner: boolean; isMember: boolean 
       </span>
     )
   }
+  if (isPaid) {
+    return (
+      <span className="rounded-full bg-sky-900/50 text-sky-400 text-xs px-3 py-1 font-medium">
+        Paid
+      </span>
+    )
+  }
   return (
     <span className="rounded-full bg-zinc-800 text-zinc-500 text-xs px-3 py-1 font-medium">
       Free
@@ -33,6 +41,7 @@ export default function Welcome() {
   const { user, loading } = useAuth()
   const navigate = useNavigate()
   const [membersUrl, setMembersUrl] = useState('')
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
 
   useEffect(() => {
     api.health().then((h) => setMembersUrl(h.members_url || '')).catch(() => {})
@@ -90,12 +99,12 @@ export default function Welcome() {
                   {user.email}
                 </div>
               </div>
-              <PlanBadge isOwner={user.is_owner} isMember={user.is_member} />
+              <PlanBadge isOwner={user.is_owner} isMember={user.is_member} isPaid={user.is_paid} />
             </div>
 
             <div className="flex flex-col gap-2 flex-wrap">
-            
-            {user.is_owner || user.is_member ? (
+
+            {user.is_owner || user.is_member || user.is_paid ? (
               <button
                 onClick={() => navigate('/', { replace: true })}
                 className="btn-primary"
@@ -103,14 +112,23 @@ export default function Welcome() {
                 Get Started
               </button>
             ) : membersUrl ? (
-              <a
-                href={membersUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn-membership"
-              >
-                Become a Member
-              </a>
+              <div className="flex flex-row items-center gap-3 flex-wrap justify-center">
+                <a
+                  href={membersUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-membership"
+                >
+                  Become a Member
+                </a>
+                <span className="text-xs text-zinc-600">or</span>
+                <button
+                  onClick={() => setUpgradeOpen(true)}
+                  className="inline-flex items-center justify-center gap-3 rounded-lg bg-white px-4 py-3 text-sm font-medium text-black transition-colors hover:bg-zinc-200"
+                >
+                  Upgrade plan
+                </button>
+              </div>
             ) : <div className="flex items-center justify-center p-4">
               <IOSLoading size={42} />
             </div>
@@ -124,6 +142,8 @@ export default function Welcome() {
             </button>
             </div>
           </div>
+
+          <UpgradeDialog open={upgradeOpen} onOpenChange={setUpgradeOpen} />
 
         </div>
 

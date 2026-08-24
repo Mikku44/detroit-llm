@@ -7,6 +7,8 @@ To provide the service efficiently and verify access, we may collect the followi
 
 Account information: Such as YouTube Channel ID, Discord User ID, or Email used to verify your membership status.
 
+Google User Data / YouTube API Data will be used strictly for membership authentication and will not be shared with or transferred to third parties.
+
 Usage data: Number of messages sent, timestamps, prompt length, and quota consumption history.
 
 Chat history/logs: The questions (input prompts) you send to the system for processing.
