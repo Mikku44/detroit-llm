@@ -4,7 +4,7 @@ FROM node:24-alpine AS frontend
 
 WORKDIR /build/dashboard
 COPY dashboard/package.json dashboard/package-lock.json ./
-RUN npm ci
+RUN npm install
 
 COPY dashboard/ ./
 RUN npm run build
