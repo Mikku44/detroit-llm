@@ -69,6 +69,11 @@ services:
       - "443:443"
     depends_on:
       - backend
+    env_file:
+      - .env
+    environment:
+      DOMAIN: ${DOMAIN:-chat.khain.app}
+      ACME_EMAIL: ${ACME_EMAIL:-your-email@example.com}
     volumes:
       - caddy-data:/data
       - caddy-config:/config

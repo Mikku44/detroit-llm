@@ -3,10 +3,10 @@ FROM node:24-alpine AS frontend
 
 WORKDIR /build/dashboard
 COPY dashboard/package.json dashboard/package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY dashboard/ ./
-RUN npm run build
+RUN --mount=type=cache,target=/root/.npm npm run build
 
 # ---- Stage 2: backend runtime ----
 FROM python:3.10-slim AS backend

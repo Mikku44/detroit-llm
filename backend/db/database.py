@@ -15,14 +15,16 @@ def _is_postgres(url: str) -> bool:
 
 def _make_engine(url: str):
     if _is_postgres(url):
+        is_neon = "neon.tech" in url or "pooler" in url
         return create_async_engine(
             url,
             echo=False,
             pool_pre_ping=True,
-            pool_size=10,
-            max_overflow=20,
+            pool_size=5 if is_neon else 10,
+            max_overflow=10 if is_neon else 20,
             pool_recycle=300,
             pool_timeout=30,
+            connect_args={"prepared_statement_cache_size": 0} if is_neon else {},
         )
     return create_async_engine(url, echo=False)
 
