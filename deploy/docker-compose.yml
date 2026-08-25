@@ -19,9 +19,7 @@ services:
       - app-data:/data
     expose:
       - "8000"
-    security_opt:
-      - no-new-privileges:true
-    read_only: true
+    read_only: false
     tmpfs:
       - /tmp
     healthcheck:
