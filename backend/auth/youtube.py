@@ -424,6 +424,22 @@ def _is_owner(email: str) -> bool:
     return bool(email and owner_email and email.strip().lower() == owner_email)
 
 
+def _public_dashboard_url(request: Request) -> str:
+    """Resolve the dashboard base URL to redirect back to after OAuth.
+
+    Prefers the configured DASHBOARD_URL. When it is still the localhost
+    dev default (misconfigured/unset in prod), derive the base from the
+    request host instead — the OAuth callback always arrives on the public
+    host, so this never bounces users back to localhost.
+    """
+    base = settings.dashboard_url.strip()
+    if "localhost" in base or "127.0.0.1" in base:
+        scheme = request.url.scheme or "https"
+        netloc = request.url.netloc
+        base = f"{scheme}://{netloc}"
+    return base.rstrip("/")
+
+
 @router.get("/login")
 async def youtube_login():
     return RedirectResponse(url=_get_owner_flow_url())
@@ -438,6 +454,7 @@ async def user_login(request: Request):
 
 @router.get("/callback")
 async def youtube_callback(
+    request: Request,
     db: AsyncSession = Depends(get_db),
     code: str | None = None,
     error: str | None = None,
@@ -446,12 +463,13 @@ async def youtube_callback(
     # Safely parse state query string
     parsed_state = parse_qs(state)
     target_redirect = parsed_state.get("redirect", [""])[0]
+    dashboard_base = _public_dashboard_url(request)
 
     # Google redirects here with `error` when the user denies consent.
     if error:
         if target_redirect == "dashboard":
             return RedirectResponse(
-                url=f"{settings.dashboard_url}/callback?error={quote(error, safe='')}"
+                url=f"{dashboard_base}/callback?error={quote(error, safe='')}"
             )
         raise HTTPException(status_code=400, detail=f"OAuth error: {error}")
 
@@ -516,7 +534,7 @@ async def youtube_callback(
     if target_redirect == "dashboard":
         # Token in the URL fragment (not query) so it is never sent to a server
         # via Referer and does not appear in server logs / browser history.
-        return RedirectResponse(url=f"{settings.dashboard_url}/callback#token={session_token}")
+        return RedirectResponse(url=f"{dashboard_base}/callback#token={session_token}")
 
     return JSONResponse({
         "status": "authenticated",

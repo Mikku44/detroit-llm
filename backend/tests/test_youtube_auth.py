@@ -192,14 +192,33 @@ def test_callback_missing_code_returns_400(client):
     assert r.json()["detail"] == "Missing authorization code"
 
 
-def test_callback_oauth_error_redirects_to_dashboard(client):
+def test_callback_oauth_error_redirects_to_configured_dashboard(client, monkeypatch):
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "dashboard_url", "https://chat.khain.app")
     r = client.get(
         "/auth/youtube/callback",
         params={"error": "access_denied", "state": "redirect=dashboard"},
         follow_redirects=False,
     )
     assert r.status_code in (302, 303, 307)
-    assert r.headers["location"] == "http://localhost:5173/callback?error=access_denied"
+    assert r.headers["location"] == "https://chat.khain.app/callback?error=access_denied"
+
+
+def test_callback_oauth_error_never_redirects_to_localhost(client):
+    """With the default (localhost) DASHBOARD_URL, derive the base from the request host."""
+    from backend.config import settings
+
+    assert "localhost" in settings.dashboard_url  # dev default
+    r = client.get(
+        "/auth/youtube/callback",
+        params={"error": "access_denied", "state": "redirect=dashboard"},
+        follow_redirects=False,
+    )
+    assert r.status_code in (302, 303, 307)
+    loc = r.headers["location"]
+    assert "localhost" not in loc and "127.0.0.1" not in loc
+    assert loc.startswith(f"{client.base_url}/callback?error=")
 
 
 def test_callback_oauth_error_without_redirect_returns_400(client):
