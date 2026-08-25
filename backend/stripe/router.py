@@ -46,9 +46,13 @@ async def create_checkout(
     user_id: str = Depends(require_session),
     db: AsyncSession = Depends(get_db),
 ):
-    """Create a Stripe Checkout Session for a paid tier (monthly subscription).
+    """Create a Stripe Checkout Session for a paid tier.
 
-    Body: {"tier_id": "nomad" | "dreamer" | "entrepreneur" | "angel"}
+    Body: {"tier_id": "nomad" | ..., "payment_method": "card" | "promptpay"}
+    - card: monthly subscription (recurring)
+    - promptpay: one-time PromptPay QR payment for 30 days (THB, Checkout payment mode).
+      PromptPay is not supported in Checkout subscription mode per Stripe docs,
+      so we use payment mode for QR payments.
     On payment, Stripe sends checkout.session.completed -> the webhook sets
     user.is_paid = True so the user gets full access immediately.
     """
@@ -61,30 +65,52 @@ async def create_checkout(
     if not tier or tier_id == "free":
         raise HTTPException(status_code=400, detail=f"Unknown tier: {tier_id}")
 
+    payment_method = (body.get("payment_method") or "card").strip().lower()
+    if payment_method not in ("card", "promptpay"):
+        raise HTTPException(status_code=400, detail="payment_method must be 'card' or 'promptpay'")
+
     unit_amount = _parse_amount_thb(tier["price"])
 
-    # If the user already has a Stripe customer + subscription, let them manage
-    # (cancel/reactivate) via the existing customer portal instead of paying twice.
     user = await _user_by_id(db, user_id)
-    if user and user.stripe_customer_id and user.stripe_subscription_id and user.is_paid:
+    if payment_method == "card" and user and user.stripe_customer_id and user.stripe_subscription_id and user.is_paid:
         raise HTTPException(
             status_code=409,
             detail="You already have an active subscription. Use your Stripe portal to manage it.",
         )
 
-    form = {
-        "mode": "subscription",
-        "success_url": f"{settings.dashboard_url}/usage?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-        "cancel_url": f"{settings.dashboard_url}/usage?checkout=cancelled",
-        "client_reference_id": user_id,
-        "metadata[tier_id]": tier_id,
-        "metadata[user_id]": user_id,
-        "line_items[0][quantity]": "1",
-        "line_items[0][price_data][currency]": "thb",
-        "line_items[0][price_data][unit_amount]": str(unit_amount),
-        "line_items[0][price_data][recurring][interval]": "month",
-        "line_items[0][price_data][product_data][name]": f"{tier['emoji']} {tier['name']} — Detroit LLM",
-    }
+    if payment_method == "promptpay":
+        form = {
+            "mode": "payment",
+            "success_url": f"{settings.dashboard_url}/usage?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
+            "cancel_url": f"{settings.dashboard_url}/usage?checkout=cancelled",
+            "client_reference_id": user_id,
+            "metadata[tier_id]": tier_id,
+            "metadata[user_id]": user_id,
+            "metadata[payment_method]": "promptpay",
+            "line_items[0][quantity]": "1",
+            "line_items[0][price_data][currency]": "thb",
+            "line_items[0][price_data][unit_amount]": str(unit_amount),
+            "line_items[0][price_data][product_data][name]": f"{tier['emoji']} {tier['name']} — Detroit LLM (PromptPay)",
+            "payment_method_types[0]": "promptpay",
+            "payment_method_types[1]": "card",
+            "expires_at": str(int(__import__("time").time()) + 30 * 60),
+        }
+    else:
+        form = {
+            "mode": "subscription",
+            "success_url": f"{settings.dashboard_url}/usage?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
+            "cancel_url": f"{settings.dashboard_url}/usage?checkout=cancelled",
+            "client_reference_id": user_id,
+            "metadata[tier_id]": tier_id,
+            "metadata[user_id]": user_id,
+            "metadata[payment_method]": "card",
+            "line_items[0][quantity]": "1",
+            "line_items[0][price_data][currency]": "thb",
+            "line_items[0][price_data][unit_amount]": str(unit_amount),
+            "line_items[0][price_data][recurring][interval]": "month",
+            "line_items[0][price_data][product_data][name]": f"{tier['emoji']} {tier['name']} — Detroit LLM",
+            "payment_method_types[0]": "card",
+        }
     if user and user.stripe_customer_id:
         form["customer"] = user.stripe_customer_id
 
@@ -94,7 +120,7 @@ async def create_checkout(
         raise HTTPException(status_code=502, detail="Failed to create Stripe checkout session")
 
     data = resp.json()
-    return {"session_id": data["id"], "url": data["url"], "tier_id": tier_id}
+    return {"session_id": data["id"], "url": data["url"], "tier_id": tier_id, "payment_method": payment_method}
 
 
 @router.get("/checkout/{session_id}")
@@ -327,6 +353,8 @@ async def stripe_webhook(
     obj = data.get("object") or {}
 
     # Map a checkout session to its user + subscription via client_reference_id.
+    # Supports both card subscriptions (mode=subscription, has subscription id)
+    # and PromptPay one-time payments (mode=payment, no subscription).
     if event_type == "checkout.session.completed":
         session = obj
         user_id = session.get("client_reference_id")
@@ -348,7 +376,7 @@ async def stripe_webhook(
         await db.commit()
         # Record the payment in the history table.
         await _record_payment(db, user_id, session)
-        return JSONResponse({"received": True, "user_id": user_id, "is_paid": True})
+        return JSONResponse({"received": True, "user_id": user_id, "is_paid": True, "payment_method": (session.get("metadata") or {}).get("payment_method")})
 
     # A subscription object: id, customer, status, items[0].price.metadata.tier_id.
     if event_type in ("customer.subscription.deleted", "customer.subscription.updated"):

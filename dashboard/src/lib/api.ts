@@ -45,7 +45,7 @@ export const api = {
 
   getPayments: () => request('/admin/payments'),
 
-  createCheckout: (tierId: string) => request('/stripe/checkout', { method: 'POST', body: JSON.stringify({ tier_id: tierId }) }),
+  createCheckout: (tierId: string, paymentMethod: string = 'card') => request('/stripe/checkout', { method: 'POST', body: JSON.stringify({ tier_id: tierId, payment_method: paymentMethod }) }),
 
   checkoutStatus: (sessionId: string) => request(`/stripe/checkout/${sessionId}`),
 

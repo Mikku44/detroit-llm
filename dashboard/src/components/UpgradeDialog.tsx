@@ -66,11 +66,11 @@ export default function UpgradeDialog({
       .catch(() => setSub(null))
   }, [open])
 
-  const startCheckout = async (tierId: string) => {
-    setCheckoutBusy(tierId)
+  const startCheckout = async (tierId: string, paymentMethod: string = 'card') => {
+    setCheckoutBusy(`${tierId}:${paymentMethod}`)
     setCheckoutError(null)
     try {
-      const res = await api.createCheckout(tierId)
+      const res = await api.createCheckout(tierId, paymentMethod)
       if (res?.url) {
         window.location.href = res.url
       } else {
@@ -208,14 +208,25 @@ export default function UpgradeDialog({
                         )}
                       </>
                     ) : (
-                      <button
-                        onClick={() => startCheckout(t.id)}
-                        disabled={checkoutBusy === t.id}
-                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-(--primary-color) px-3 py-2 text-sm font-medium text-(--primary-foreground) transition-opacity hover:opacity-90 disabled:opacity-50"
-                      >
-                        <CreditCard size={15} />
-                        {checkoutBusy === t.id ? 'Opening…' : `Subscribe ${t.price}/mo`}
-                      </button>
+                      <div className="flex flex-col gap-2">
+                        <button
+                          onClick={() => startCheckout(t.id, 'card')}
+                          disabled={checkoutBusy === `${t.id}:card`}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg bg-(--primary-color) px-3 py-2 text-sm font-medium text-(--primary-foreground) transition-opacity hover:opacity-90 disabled:opacity-50"
+                        >
+                          <CreditCard size={15} />
+                          {checkoutBusy === `${t.id}:card` ? 'Opening…' : `Card ${t.price}/mo`}
+                        </button>
+                        <button
+                          onClick={() => startCheckout(t.id, 'promptpay')}
+                          disabled={checkoutBusy === `${t.id}:promptpay`}
+                          className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-700 bg-emerald-900/40 px-3 py-2 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-900/60 disabled:opacity-50"
+                        >
+                          <span className="text-base">฿</span>
+                          {checkoutBusy === `${t.id}:promptpay` ? 'Opening…' : `PromptPay ${t.price}`}
+                        </button>
+                        <p className="text-[10px] text-zinc-500 text-center">PromptPay = one-time QR, 30 days</p>
+                      </div>
                     )}
                     {membersUrl ? (
                       <button
