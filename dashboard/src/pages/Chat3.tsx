@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { Markdown } from '../components/Markdown'
 import UpgradeDialog from '../components/UpgradeDialog'
@@ -296,6 +297,8 @@ function AttachmentPreview({ attachment, onRemove }: { attachment: Attachment; o
 }
 
 export default function Chat3() {
+  const { id } = useParams()
+  const navigate = useNavigate()
   const [messages, setMessages] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -332,6 +335,12 @@ export default function Chat3() {
   useEffect(() => {
     api.health().then((h) => setMembersUrl((h as { members_url?: string }).members_url || '')).catch(() => {})
   }, [])
+
+  // Open the conversation given by the URL (/chat/:id).
+  useEffect(() => {
+    if (id && id !== activeId) setActiveId(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
 
   // If no conversation is active yet, load the most recent saved one for this user.
   useEffect(() => {
@@ -382,12 +391,15 @@ export default function Chat3() {
     if (!historyLoaded || busy || messages.length === 0) return
     if (convSaveTimer.current) clearTimeout(convSaveTimer.current)
     convSaveTimer.current = setTimeout(async () => {
-      await saveConversation(activeId, messages, model || undefined)
+      const convId = await saveConversation(activeId, messages, model || undefined)
+      if (convId && convId !== activeId) {
+        navigate(`/chat/${convId}`, { replace: true })
+      }
     }, 1200)
     return () => {
       if (convSaveTimer.current) clearTimeout(convSaveTimer.current)
     }
-  }, [messages, busy, historyLoaded, model, activeId, saveConversation])
+  }, [messages, busy, historyLoaded, model, activeId, saveConversation, navigate])
 
   useEffect(() => {
     api
@@ -397,15 +409,15 @@ export default function Chat3() {
   }, [])
 
   useEffect(() => {
-    fetch('/v1/models')
+    if (!sessionToken) return
+    fetch('/v1/models', {
+      headers: { Authorization: `Bearer ${sessionToken}` },
+    })
       .then((r) => r.json())
       .then((d) => {
-        const all = (d?.data || [])
-          .map((m: { id: string }) => m.id)
-          .filter((id: string) => /deepseek|qwen|stealth|ox-alpha|openrouter/i.test(id))
-        const list = freeTier
-          ? all.filter((id: string) => id.includes('flash') && !id.includes('vision'))
-          : all
+        // The backend already narrows the list to the models this user may
+        // call (free tier = flash + stealth/ox-alpha), so show them all.
+        const list = (d?.data || []).map((m: { id: string }) => m.id)
         if (list.length) {
           setModels(list)
           setModel((cur) =>
@@ -414,7 +426,7 @@ export default function Chat3() {
         }
       })
       .catch(() => {})
-  }, [freeTier])
+  }, [sessionToken])
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
@@ -524,7 +536,11 @@ export default function Chat3() {
     setInput('')
     setPending([])
     const hasImage = attachments.some((a) => a.kind === 'image')
-    const requestModel = freeTier ? (model.includes('flash') ? model : 'deepseek-v4-flash') : model
+    const requestModel = freeTier
+      ? model.includes('flash') || model === 'stealth/ox-alpha'
+        ? model
+        : 'deepseek-v4-flash'
+      : model
     const upstreamModel = hasImage ? 'gemini-2.5-flash' : requestModel
     setMessages((m) => [...m, { role: 'user', content: text, attachments, model: requestModel }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
     setBusy(true)
@@ -714,6 +730,7 @@ export default function Chat3() {
     stop()
     setMessages([])
     setActiveId(null)
+    navigate('/chat')
     setHistoryLoaded(true)
   }
 

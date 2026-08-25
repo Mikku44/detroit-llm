@@ -32,7 +32,7 @@ export default function App() {
           <Route path="usage" element={<Usage />} />
           <Route path="chat-assistant" element={<Chat />} />
           {/* <Route path="chatv2" element={<ChatV2 />} /> */}
-          <Route path="chat" element={<Chat3 />} />
+          <Route path="chat/:id?" element={<Chat3 />} />
           <Route path="docs" element={<Docs />} />
         </Route>
       </Routes>

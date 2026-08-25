@@ -445,7 +445,7 @@ def test_free_user_pro_model_rejected(client, verified_free_user_id):
         headers={"Authorization": f"Bearer {created['key']}"},
     )
     assert r.status_code == 403
-    assert "flash model" in r.text
+    assert "Free tier only includes" in r.text
 
 
 def test_free_user_vision_model_rejected(client, verified_free_user_id):
@@ -649,6 +649,81 @@ def test_qwen_flash_is_free_tier_ok():
     assert _is_flash_model("qwen3.7-pro") is False
 
 
+def test_ox_alpha_is_free_tier_ok():
+    """stealth/ox-alpha is allowed on the free tier."""
+    from backend.proxy.router import _is_free_tier_model
+
+    assert _is_free_tier_model("stealth/ox-alpha") is True
+    assert _is_free_tier_model("deepseek-v4-pro") is False
+    assert _is_free_tier_model("deepseek-v4-flash-vision-exp") is False
+
+
+def test_free_user_can_use_ox_alpha(client, api_key, monkeypatch):
+    """Free-tier users may request stealth/ox-alpha; the gate passes it through."""
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "openrouter_api_key", "test-key")
+
+    class FakeUser:
+        id = "free-u"
+        is_member = False
+        is_owner = False
+        is_paid = False
+        youtube_channel_id = None
+
+    class FakeResult:
+        def scalar_one_or_none(self):
+            return FakeUser()
+
+    class FakeDB:
+        async def execute(self, *a, **k):
+            return FakeResult()
+
+        async def commit(self):
+            pass
+
+        async def add(self, *a, **k):
+            pass
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "choices": [{"message": {"content": "openrouter reply", "role": "assistant"}}],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 2},
+            }
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            return FakeResponse()
+
+    import backend.proxy.router as r
+    from backend.proxy.router import _handle_chat_completions
+
+    orig_http = r.httpx.AsyncClient
+    r.httpx.AsyncClient = lambda *a, **k: FakeClient()
+    try:
+        resp = asyncio.run(
+            _handle_chat_completions(
+                FakeDB(),
+                "free-u",
+                {"model": "stealth/ox-alpha", "messages": [{"role": "user", "content": "hi"}], "stream": False},
+            )
+        )
+    finally:
+        r.httpx.AsyncClient = orig_http
+
+    assert resp.status_code == 200, resp
+
+
+
 def test_openrouter_requires_key(client, api_key, monkeypatch):
     """stealth/ox-alpha without an OpenRouter key fails with a clear 503."""
     from backend.config import settings
@@ -661,6 +736,27 @@ def test_openrouter_requires_key(client, api_key, monkeypatch):
     )
     assert r.status_code == 503
     assert "OPENROUTER_API_KEY" in r.text
+
+
+def test_openrouter_body_forces_reasoning_when_disabled():
+    from backend.proxy.router import _openrouter_body
+
+    # Explicit disable -> coerced to an enabled effort.
+    body = _openrouter_body({"model": "stealth/ox-alpha", "reasoning": {"effort": "none"}})
+    assert body["reasoning"] == {"effort": "high"}
+
+    body = _openrouter_body({"model": "stealth/ox-alpha", "reasoning": {"enabled": False}})
+    assert body["reasoning"] == {"effort": "high"}
+
+    body = _openrouter_body({"model": "stealth/ox-alpha", "reasoning_effort": "none"})
+    assert body["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in body
+
+    # Already-enabled or absent reasoning passes through unchanged.
+    assert _openrouter_body({"model": "stealth/ox-alpha", "reasoning": {"effort": "high"}})["reasoning"] == {
+        "effort": "high"
+    }
+    assert _openrouter_body({"model": "stealth/ox-alpha"}) == {"model": "stealth/ox-alpha"}
 
 
 def test_openrouter_routes_to_openrouter(client, api_key, monkeypatch):
@@ -1412,6 +1508,17 @@ def test_models_lists_claude_aliases(client):
     ids = [m["id"] for m in r.json()["data"]]
     assert "claude-sonnet-4-5" in ids
     assert "deepseek-v4-pro" in ids
+
+
+def test_models_free_user_sees_only_free_tier(client, session_token):
+    """A dashboard session token narrows /v1/models to the free-tier models."""
+    r = client.get("/v1/models", headers={"Authorization": f"Bearer {session_token}"})
+    assert r.status_code == 200
+    ids = [m["id"] for m in r.json()["data"]]
+    assert "deepseek-v4-flash" in ids
+    assert "stealth/ox-alpha" in ids
+    assert "deepseek-v4-pro" not in ids
+    assert "deepseek-v4-flash-vision-exp" not in ids
 
 
 def test_image_seed_is_stable():

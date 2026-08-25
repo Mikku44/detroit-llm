@@ -1,8 +1,11 @@
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Write-Host "Starting Backend (FastAPI)..." -ForegroundColor Cyan
-$backendJob = Start-Process -FilePath "uvicorn" -ArgumentList "backend.main:app --reload --host 0.0.0.0 --port 8000" `
-    -WorkingDirectory (Join-Path $Root "backend") -NoNewWindow -PassThru
+# Run uvicorn from the project root: `backend/http.py` would otherwise shadow
+# Python's stdlib `http` module. --reload is disabled because the file watcher
+# does not fire on this mounted drive (D:); restart the backend after changes.
+$backendJob = Start-Process -FilePath "uvicorn" -ArgumentList "backend.main:app --host 0.0.0.0 --port 8000" `
+    -WorkingDirectory $Root -NoNewWindow -PassThru
 
 Start-Sleep -Seconds 2
 

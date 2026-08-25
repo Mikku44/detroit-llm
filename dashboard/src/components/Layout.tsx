@@ -107,14 +107,16 @@ function SidebarInner() {
 
   const selectConv = (convId: string) => {
     setActiveId(convId)
-    navigate('/chat')
+    navigate(`/chat/${convId}`)
   }
 
   const deleteConv = (e: React.MouseEvent, convId: string) => {
     e.stopPropagation()
+    const wasActive = activeId === convId
     remove(convId)
-    if (activeId === convId) {
+    if (wasActive) {
       setActiveId(null)
+      navigate('/chat')
     }
   }
 
@@ -144,7 +146,7 @@ function SidebarInner() {
             </SidebarMenuItem>
             {links.map(({ to, label, icon: Icon }) => (
               <SidebarMenuItem key={to}>
-                <SidebarMenuButton asChild isActive={loc.pathname === to}>
+                <SidebarMenuButton asChild isActive={to === '/chat' ? loc.pathname === '/chat' || loc.pathname.startsWith('/chat/') : loc.pathname === to}>
                   <NavLink to={to} end={to === '/'}>
                     <Icon size={18} />
                     <span>{label}</span>

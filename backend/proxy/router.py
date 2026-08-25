@@ -357,9 +357,12 @@ async def require_access(
 
 
 FREE_MODEL_ONLY_MESSAGE = (
-    "Free tier only includes the flash model. "
+    "Free tier only includes the flash and stealth/ox-alpha models. "
     "Upgrade to a paid membership for pro and other models."
 )
+
+# Non-flash models that are still allowed on the free tier.
+FREE_TIER_EXTRA_MODELS = {"stealth/ox-alpha"}
 
 
 def _is_flash_model(model: str) -> bool:
@@ -368,6 +371,18 @@ def _is_flash_model(model: str) -> bool:
         return False
     resolved = _resolve_model(model)
     return "flash" in model.lower() or "flash" in resolved.lower()
+
+
+def _is_free_tier_model(model: str) -> bool:
+    """True when the requested model is allowed on the free tier (flash or ox-alpha)."""
+    if not model:
+        return False
+    # Vision stays paid/member-only even though its name contains "flash".
+    if model.lower() == "deepseek-v4-flash-vision-exp":
+        return False
+    if model.lower() in FREE_TIER_EXTRA_MODELS:
+        return True
+    return _is_flash_model(model)
 
 
 async def _is_free_user(db: AsyncSession, user_id: str) -> bool:
@@ -389,10 +404,10 @@ async def _is_free_user(db: AsyncSession, user_id: str) -> bool:
 
 
 async def _free_model_gate(db: AsyncSession, user_id: str, body: dict, default_model: str = "deepseek-v4-pro") -> str:
-    """Enforce that free-tier users only use the flash model. Returns the model to use.
+    """Enforce that free-tier users only use free-tier models. Returns the model to use.
 
     Free users default to the flash model when none is specified; an explicit
-    non-flash model is rejected with 403. Member/owner users are unaffected.
+    non-free model is rejected with 403. Member/owner users are unaffected.
     Vision models (deepseek-v4-flash-vision-exp) require a paid/member tier.
     """
     model = body.get("model", default_model)
@@ -409,7 +424,7 @@ async def _free_model_gate(db: AsyncSession, user_id: str, body: dict, default_m
             )
         return model
 
-    if _is_flash_model(model):
+    if _is_free_tier_model(model):
         return model
     if not await _is_free_user(db, user_id):
         return model
@@ -1609,6 +1624,12 @@ async def _proxy_image_tool_loop(
     round1_body.pop("tools", None)
     round1_body.pop("tool_choice", None)
     round1_body.pop("response_format", None)
+    # The optimizer/compose rounds always run against DeepSeek, so send a model
+    # DeepSeek understands. Claude aliases resolve to deepseek; qwen/stealth/
+    # gemini/image models fall back to the default deepseek model — this lets
+    # image gen work no matter which model the client requested.
+    engine_model = _image_engine_model(model)
+    round1_body["model"] = engine_model
     round1_body["messages"] = _text_only_messages(round1_body.get("messages") or [])
     if isinstance(round1_body.get("messages"), list):
         optimizer_prompt = {
@@ -1711,6 +1732,7 @@ async def _proxy_image_tool_loop(
     round2_body.pop("tools", None)
     round2_body.pop("tool_choice", None)
     round2_body.pop("response_format", None)
+    round2_body["model"] = engine_model
     round2_body["messages"] = round2_messages
 
     status2, data2 = await _post(round2_body)
@@ -2429,6 +2451,25 @@ def _resolve_model(model: str) -> str:
     return CLAUDE_ALIAS_TO_MODEL.get(model, model)
 
 
+def _image_engine_model(model: str) -> str:
+    """Map any requested model to a model DeepSeek can run for the image tool loop.
+
+    Image generation always drives its optimizer/compose rounds through DeepSeek.
+    Claude aliases already resolve to a deepseek model; qwen/stealth/gemini and the
+    dedicated image models have no DeepSeek counterpart, so they fall back to the
+    default deepseek-v4-pro. This keeps image gen working for every model id.
+    """
+    engine = _resolve_model(model)
+    if (
+        engine.lower().startswith("qwen")
+        or engine.lower() == "stealth/ox-alpha"
+        or engine.startswith("gemini-")
+        or engine in ("gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation")
+    ):
+        return "deepseek-v4-pro"
+    return engine
+
+
 def _anthropic_chat_payload(body: dict) -> dict:
     """Build an OpenAI chat-completions payload from an Anthropic Messages request."""
     messages = _anthropic_to_chat_messages(body)
@@ -2822,6 +2863,25 @@ def _openrouter_headers() -> dict:
     }
 
 
+def _openrouter_body(body: dict) -> dict:
+    """Normalize a chat body for OpenRouter.
+
+    OpenRouter reasoning models (stealth/ox-alpha) require reasoning and reject an
+    explicit disable (e.g. `reasoning: {effort: "none"}`), so coerce a disabled
+    reasoning into a valid enabled effort before forwarding.
+    """
+    body = dict(body)
+    reasoning = body.get("reasoning") or {}
+    disabled = (
+        isinstance(reasoning, dict)
+        and (reasoning.get("effort") == "none" or reasoning.get("enabled") is False)
+    ) or body.get("reasoning_effort") == "none"
+    if disabled:
+        body["reasoning"] = {"effort": "high"}
+        body.pop("reasoning_effort", None)
+    return body
+
+
 async def _proxy_to_openrouter(
     db: AsyncSession,
     user_id: str,
@@ -2837,6 +2897,7 @@ async def _proxy_to_openrouter(
     """
     url = f"{settings.openrouter_url}/chat/completions"
     headers = _openrouter_headers()
+    body = _openrouter_body(body)
 
     if is_stream:
         async def openrouter_stream():
@@ -3272,10 +3333,22 @@ async def _handle_chat_compact(db: AsyncSession, user_id: str, body: dict):
 
 @router.get("/v1/models")
 @router.get("/models")
-async def list_models():
+async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
     # Claude Code / Anthropic SDKs validate the requested model against this list.
     # Always advertise our gateway models (with claude-style aliases so the name
     # Claude Code sends is found) alongside whatever the upstream provides.
+    #
+    # A dashboard session token narrows the list to the models the signed-in
+    # user may actually call (free tier = flash + stealth/ox-alpha). API keys
+    # and unauthenticated harness clients still get the full list.
+    free_user = False
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        try:
+            user_id = await require_session(request)
+            free_user = await _is_free_user(db, user_id)
+        except HTTPException:
+            free_user = False
     gateway_models = [
         {
             "object": "model",
@@ -3387,5 +3460,7 @@ async def list_models():
             g["id"] for g in gateway_models
         }:
             data.append(m)
+    if free_user:
+        data = [m for m in data if _is_free_tier_model(m.get("id") or "")]
     return JSONResponse(content={"object": "list", "data": data})
 
