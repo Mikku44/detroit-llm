@@ -23,6 +23,7 @@ async def _stripe_client() -> httpx.AsyncClient:
         base_url=STRIPE_API_URL,
         headers={"Authorization": f"Bearer {settings.stripe_api_key}"},
         timeout=15,
+        limits=httpx.Limits(max_connections=20, max_keepalive_connections=5),
     )
 
 

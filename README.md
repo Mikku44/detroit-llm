@@ -120,3 +120,55 @@ response = client.chat.completions.create(
 )
 print(response.choices[0].message.content)
 ```
+
+## Tier limits & usage page
+
+- `/admin/usage/limits` returns the logged-in user's tier (`current_tier_id`),
+  the tier's weekly/monthly token budgets and monthly image quota, plus the full
+  `TIER_OPTIONS` pricing table. The `/usage` dashboard page renders these bars.
+- The gateway enforces the tier's token budget on every `/v1/*` call: a user who
+  carries a `tier_id` (Stripe subscription or YouTube level→tier mapping) is
+  blocked with `403` once their weekly or monthly usage reaches the tier limit —
+  even for owner/member accounts. The windows are **sliding** (last 7 / 30 days),
+  so users unblock automatically as old usage ages out.
+
+## Production deployment checklist (สิ่งที่ต้องทำ)
+
+1. Commit the pending changes (tier enforcement, usage page, JSON 400 handler,
+   cleanup script, and the uncommitted backend/dashboard work):
+   ```bash
+   git add -A
+   git commit -m "feat: enforce per-tier token limits, cleanup cron, usage page fixes"
+   git push
+   ```
+2. On the VPS, pull and rebuild the stack:
+   ```bash
+   git pull
+   cd /opt/detroit-llm/deploy
+   docker compose up -d --build
+   docker compose logs -f backend
+   ```
+3. Install the daily usage-cleanup cronjob (once):
+   ```bash
+   crontab -e
+   # 0 0 * * * cd /opt/detroit-llm/deploy && docker compose exec -T backend python -m backend.scripts.cleanup_usage >> /var/log/detroit-cleanup.log 2>&1
+   ```
+4. Verify production is healthy:
+   ```bash
+   curl https://chat.khain.app/health            # expect {"status":"ok",...}
+   curl https://chat.khain.app/v1/models          # expect 200
+   ```
+
+## Daily usage-log housekeeping (cron)
+
+The per-tier weekly/monthly limits use a sliding window, so users reset
+automatically without any job. A cronjob at **00:00 UTC** still prunes usage
+logs past the retention window (35 days by default) to keep the database small,
+even when nobody sends requests:
+
+```bash
+cd /opt/detroit-llm/deploy && docker compose exec -T backend python -m backend.scripts.cleanup_usage
+# preview first: add --dry-run
+```
+
+See `deploy/README.md` for the full cron setup and retention rationale.

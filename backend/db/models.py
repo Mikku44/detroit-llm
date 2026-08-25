@@ -65,7 +65,7 @@ class UsageLog(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
     api_key: Mapped["ApiKey"] = relationship(back_populates="usage_logs")
 

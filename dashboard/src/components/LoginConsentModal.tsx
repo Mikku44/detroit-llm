@@ -108,6 +108,7 @@ export default function LoginConsentModal({
     if (step === 'terms') {
       setStep('privacy')
     } else {
+      // Record consent, then redirect to Google/YouTube OAuth sign-in.
       recordLegalConsent()
       onOpenChange(false)
       setLoading(true)

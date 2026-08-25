@@ -310,6 +310,26 @@ async def require_access(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status_code=403, detail="Membership required")
+
+    # A tier_id (Stripe subscription or the YouTube level→tier mapping) carries
+    # a weekly/monthly token budget that is enforced for everyone — including
+    # owners/members. e.g. the owner subscribed to the nomad tier is gated by
+    # the nomad limits once they run out.
+    tier = next((t for t in TIER_OPTIONS if t["id"] == user.tier_id), None)
+    if tier and tier["id"] != "free":
+        weekly_used, monthly_used = await _tier_usage(db, user_id)
+        if weekly_used >= tier["weekly"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Weekly limit reached. Upgrade to a higher tier or wait for the weekly window to reset.",
+            )
+        if monthly_used >= tier["monthly"]:
+            raise HTTPException(
+                status_code=403,
+                detail="Monthly limit reached. Upgrade to a higher tier or wait for the monthly window to reset.",
+            )
+        return user_id
+
     if user.is_member or user.is_owner or user.is_paid:
         return user_id
 
@@ -1024,6 +1044,25 @@ _IMAGE_INTENT_KEYWORDS = (
 _IMAGE_INTENT_RE = re.compile(_IMAGE_INTENT_KEYWORDS, re.IGNORECASE)
 
 
+def _text_only_messages(messages: list) -> list:
+    """Strip image parts from messages so only text remains.
+
+    The image-tool loop only needs the text prompt; re-sending base64 images
+    (from history) to the LLM bloats the context and trips the model's
+    max-context-length limit.
+    """
+    out: list = []
+    for msg in messages or []:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            text_parts = [p for p in content if isinstance(p, dict) and p.get("type") == "text"]
+            msg = {**msg, "content": text_parts if text_parts else ""}
+        out.append(msg)
+    return out
+
+
 def _last_user_text(messages: list) -> str:
     """Return the plain text of the last user message (Anthropic/OpenAI shape)."""
     for msg in reversed(messages or []):
@@ -1142,7 +1181,7 @@ async def _classify_image_intent(messages: list) -> bool | None:
         },
     ]
 
-    async with httpx.AsyncClient(timeout=_IMAGE_INTENT_CLASSIFIER_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_IMAGE_INTENT_CLASSIFIER_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         for attempt in attempts:
             try:
                 resp = await client.post(url, json=attempt, headers=headers)
@@ -1197,7 +1236,7 @@ def _parse_size(size: str) -> tuple[int, int]:
 
 async def _download_image_bytes(url: str) -> tuple[bytes, str]:
     """Download an image and return (bytes, content_type)."""
-    async with httpx.AsyncClient(timeout=_IMAGE_FETCH_TIMEOUT, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=_IMAGE_FETCH_TIMEOUT, follow_redirects=True, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.get(url)
         resp.raise_for_status()
         ctype = resp.headers.get("content-type", "image/jpeg").split(";")[0].strip()
@@ -1219,7 +1258,7 @@ async def _unsplash_url(query: str, seed_text: str, size: str = "1024x1024") -> 
         "per_page": 1,
     }
     headers = {"Authorization": f"Client-ID {settings.unsplash_access_key}"}
-    async with httpx.AsyncClient(timeout=_IMAGE_FETCH_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_IMAGE_FETCH_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.get(_UNSPLASH_SEARCH_API, params=params, headers=headers)
         resp.raise_for_status()
         data = resp.json()
@@ -1280,7 +1319,7 @@ async def _dashscope_image(prompt: str, size: str) -> dict:
         "Authorization": f"Bearer {settings.dashscope_api_key}",
     }
 
-    async with httpx.AsyncClient(timeout=_IMAGE_GEN_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_IMAGE_GEN_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(_DASHSCOPE_IMAGE_URL, json=body, headers=headers)
         if resp.status_code >= 400:
             raise RuntimeError(
@@ -1552,7 +1591,7 @@ async def _proxy_image_tool_loop(
         attempts[0].setdefault("response_format", {"type": "json_object"})
         last = (0, {"error": {"message": "no attempt"}})
         for attempt in attempts:
-            async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                 resp = await client.post(url, json=attempt, headers=headers)
                 try:
                     data = resp.json()
@@ -1570,6 +1609,7 @@ async def _proxy_image_tool_loop(
     round1_body.pop("tools", None)
     round1_body.pop("tool_choice", None)
     round1_body.pop("response_format", None)
+    round1_body["messages"] = _text_only_messages(round1_body.get("messages") or [])
     if isinstance(round1_body.get("messages"), list):
         optimizer_prompt = {
             "role": "system",
@@ -1651,7 +1691,7 @@ async def _proxy_image_tool_loop(
     image_ref = await _image_source(prompt, model, size, f"{prompt}|{model}|{size}")
 
     # Round 2: give the model the tool result and let it compose the final answer.
-    round2_messages = (body.get("messages") or []) + [
+    round2_messages = _text_only_messages(body.get("messages") or []) + [
         {
             "role": "assistant",
             "content": raw_content,
@@ -1763,7 +1803,7 @@ async def _web_search(query: str, limit: int = 5) -> list[dict]:
     """Run a real web search against DuckDuckGo's HTML endpoint (no key needed)."""
     if not query:
         return []
-    async with httpx.AsyncClient(timeout=_WEB_SEARCH_TIMEOUT, follow_redirects=True) as client:
+    async with httpx.AsyncClient(timeout=_WEB_SEARCH_TIMEOUT, follow_redirects=True, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.get(_DDG_HTML_API, params={"q": query}, headers={"User-Agent": _DDG_UA})
         resp.raise_for_status()
     return _parse_ddg_results(resp.text, limit)
@@ -1912,7 +1952,7 @@ async def _proxy_web_search_loop(
         synth_body["messages"] = synth_messages
 
         url = f"{settings.deepseek_url}/chat/completions"
-        async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
             resp = await client.post(url, json=synth_body, headers=_deepseek_headers())
         if resp.status_code < 400:
             data = resp.json()
@@ -2332,7 +2372,7 @@ async def responses_api(
             completion_tokens = 0
             completion_text = ""
             try:
-                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
@@ -2355,7 +2395,7 @@ async def responses_api(
         return StreamingResponse(_deadline_wrapper(deepseek_responses_stream()), media_type="text/event-stream")
 
     else:
-        async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
             resp = await client.post(url, json=body, headers=headers)
             data = resp.json()
             usage = data.get("usage") or {}
@@ -2542,7 +2582,7 @@ async def anthropic_messages(
             finish_reason = None
             sent_stop = False
             try:
-                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                     async with client.stream("POST", url, json=payload, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
@@ -2586,7 +2626,7 @@ async def anthropic_messages(
 
         return StreamingResponse(_deadline_wrapper(anthropic_stream()), media_type="text/event-stream")
 
-    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(url, json=payload, headers=headers)
         data = resp.json()
         if resp.status_code >= 400:
@@ -2666,7 +2706,7 @@ async def _proxy_to_deepseek(
             completion_tokens = 0
             completion_text = ""
             try:
-                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
@@ -2689,7 +2729,7 @@ async def _proxy_to_deepseek(
         return StreamingResponse(_deadline_wrapper(deepseek_stream()), media_type="text/event-stream")
 
     else:
-        async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
             resp = await client.post(url, json=body, headers=headers)
             data = resp.json()
             usage = data.get("usage") or {}
@@ -2732,7 +2772,7 @@ async def _proxy_to_dashscope(
             completion_tokens = 0
             completion_text = ""
             try:
-                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
@@ -2754,7 +2794,7 @@ async def _proxy_to_dashscope(
 
         return StreamingResponse(_deadline_wrapper(dashscope_stream()), media_type="text/event-stream")
 
-    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(url, json=body, headers=headers)
         data = resp.json()
         usage = data.get("usage") or {}
@@ -2804,7 +2844,7 @@ async def _proxy_to_openrouter(
             completion_tokens = 0
             completion_text = ""
             try:
-                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
@@ -2826,7 +2866,7 @@ async def _proxy_to_openrouter(
 
         return StreamingResponse(_deadline_wrapper(openrouter_stream()), media_type="text/event-stream")
 
-    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(url, json=body, headers=headers)
         data = resp.json()
         usage = data.get("usage") or {}
@@ -2863,7 +2903,7 @@ async def _proxy_dashscope_responses(
             completion_tokens = 0
             completion_text = ""
             try:
-                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
@@ -2885,7 +2925,7 @@ async def _proxy_dashscope_responses(
 
         return StreamingResponse(_deadline_wrapper(dashscope_responses_stream()), media_type="text/event-stream")
 
-    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(url, json=body, headers=headers)
         data = resp.json()
         usage = data.get("usage") or {}
@@ -2924,7 +2964,7 @@ async def _proxy_to_gemini(
             completion_tokens = 0
             completion_text = ""
             try:
-                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                     async with client.stream("POST", url, json=gemini_body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
@@ -2946,7 +2986,7 @@ async def _proxy_to_gemini(
 
         return StreamingResponse(_deadline_wrapper(gemini_stream()), media_type="text/event-stream")
 
-    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(url, json=gemini_body, headers=headers)
         data = resp.json()
         usage = data.get("usage") or {}
@@ -3010,7 +3050,7 @@ async def _proxy_gemini_responses(
             completion_tokens = 0
             created_time = int(time.time())
             try:
-                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                     async with client.stream("POST", url, json=gemini_body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
@@ -3079,7 +3119,7 @@ async def _proxy_gemini_responses(
 
         return StreamingResponse(_deadline_wrapper(gemini_responses_stream()), media_type="text/event-stream")
 
-    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(url, json=gemini_body, headers=headers)
         data = resp.json()
         if resp.status_code >= 400:
@@ -3210,7 +3250,7 @@ async def _handle_chat_compact(db: AsyncSession, user_id: str, body: dict):
 
     url = f"{settings.deepseek_url}/chat/completions"
     headers = _deepseek_headers()
-    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(url, json=compact_payload, headers=headers)
         data = resp.json()
         if resp.status_code >= 400:
@@ -3327,14 +3367,14 @@ async def list_models():
     # When a DeepSeek key is configured, return the real DeepSeek model list.
     if settings.deepseek_api_key:
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                 resp = await client.get(f"{settings.deepseek_url}/models", headers=_deepseek_headers())
                 upstream = resp.json()
         except httpx.ConnectError:
             pass
     if upstream is None:
         try:
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=30, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
                 resp = await client.get(f"{settings.sglang_url}/v1/models")
                 upstream = resp.json()
         except httpx.ConnectError:

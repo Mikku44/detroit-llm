@@ -14,6 +14,8 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '.
 import { useChartZoom } from '../lib/useChartZoom'
 import ApiKeyButtons from '../components/ApiKeyButtons'
 import { Skeleton } from '../components/ui/skeleton'
+import { Tooltip as UiTooltip, TooltipTrigger as UiTooltipTrigger, TooltipContent as UiTooltipContent } from '../components/ui/tooltip'
+import { CursorTooltip } from '../components/ui/cursor-tooltip'
 
 interface UsageRow {
   date: string
@@ -96,6 +98,20 @@ export default function Dashboard() {
       tokens: acc.tokens + r.total_tokens,
     }),
     { requests: 0, tokens: 0 },
+  )
+
+  const weekdayTotals = usage.reduce(
+    (acc, r) => {
+      const wd = new Date(`${r.date}T00:00:00`).getDay()
+      const cur = acc[wd] ?? { requests: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      cur.requests += r.requests
+      cur.prompt_tokens += r.prompt_tokens
+      cur.completion_tokens += r.completion_tokens
+      cur.total_tokens += r.total_tokens
+      acc[wd] = cur
+      return acc
+    },
+    {} as Record<number, { requests: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }>,
   )
 
   const chartData = range ? usage.slice(range[0], range[1] + 1) : usage
@@ -321,13 +337,26 @@ export default function Dashboard() {
                 </TableHeader>
                 <TableBody>
                   {usage.map((r) => (
-                    <TableRow key={r.date}>
-                      <TableCell>{r.date}</TableCell>
-                      <TableCell>{r.requests}</TableCell>
-                      <TableCell>{r.prompt_tokens.toLocaleString()}</TableCell>
-                      <TableCell>{r.completion_tokens.toLocaleString()}</TableCell>
-                      <TableCell>{r.total_tokens.toLocaleString()}</TableCell>
-                    </TableRow>
+                    <UiTooltip key={r.date}>
+                      <UiTooltipTrigger asChild>
+                        <TableRow>
+                          <TableCell>{r.date}</TableCell>
+                          <TableCell>{r.requests}</TableCell>
+                          <TableCell>{r.prompt_tokens.toLocaleString()}</TableCell>
+                          <TableCell>{r.completion_tokens.toLocaleString()}</TableCell>
+                          <TableCell>{r.total_tokens.toLocaleString()}</TableCell>
+                        </TableRow>
+                      </UiTooltipTrigger>
+                      <UiTooltipContent>
+                        <div className="flex flex-col gap-0.5">
+                          <div className="font-semibold">{r.date}</div>
+                          <div>Requests: {r.requests}</div>
+                          <div>Prompt: {r.prompt_tokens.toLocaleString()}</div>
+                          <div>Completion: {r.completion_tokens.toLocaleString()}</div>
+                          <div>Total: {r.total_tokens.toLocaleString()}</div>
+                        </div>
+                      </UiTooltipContent>
+                    </UiTooltip>
                   ))}
                 </TableBody>
               </Table>
@@ -341,7 +370,34 @@ export default function Dashboard() {
               <p className="text-zinc-600 text-sm">No usage data yet.</p>
             ) : (
               <div>
-                <div className="flex flex-col gap-[3px]">
+                <CursorTooltip
+                  containerClassName="flex flex-col gap-[3px]"
+                  content={({ day, hour }) => {
+                    const wd = Number(day)
+                    const h = Number(hour)
+                    const count = punchcard[wd]?.[h] ?? 0
+                    const dayTotals = weekdayTotals[wd]
+                    return (
+                      <div className="flex flex-col gap-0.5">
+                        <div className="font-semibold">
+                          {WEEKDAY_LABELS[WEEKDAY_ORDER.indexOf(wd)]} {String(h).padStart(2, '0')}:00
+                        </div>
+                        <div>
+                          {count} request{count === 1 ? '' : 's'}
+                        </div>
+                        {dayTotals && (
+                          <>
+                            <div className="my-1 border-t border-zinc-300" />
+                            <div>Requests: {dayTotals.requests}</div>
+                            <div>Prompt: {dayTotals.prompt_tokens.toLocaleString()}</div>
+                            <div>Completion: {dayTotals.completion_tokens.toLocaleString()}</div>
+                            <div>Total: {dayTotals.total_tokens.toLocaleString()}</div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  }}
+                >
                   <div className="grid grid-cols-[40px_repeat(24,1fr)] gap-[3px]">
                     <div />
                     {HOURS.map((h) => (
@@ -358,15 +414,17 @@ export default function Dashboard() {
                         return (
                           <div
                             key={h}
+                            data-tip
+                            data-tip-day={wd}
+                            data-tip-hour={h}
                             className="aspect-square rounded-[3px]"
                             style={{ backgroundColor: cellColor(count) }}
-                            title={`${WEEKDAY_LABELS[wi]} ${String(h).padStart(2, '0')}:00 — ${count} request${count === 1 ? '' : 's'}`}
                           />
                         )
                       })}
                     </div>
                   ))}
-                </div>
+                </CursorTooltip>
                 <div className="mt-3 flex items-center gap-1.5 text-[10px] text-zinc-500">
                   <span>Less</span>
                   {[0, 0.25, 0.5, 0.75, 1].map((t) => (

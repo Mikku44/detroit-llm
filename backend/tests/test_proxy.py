@@ -24,6 +24,7 @@ from backend.proxy.router import (
     _detect_image_intent,
     _image_source,
     _loremflickr_url,
+    _text_only_messages,
 )
 from backend.proxy.tokens import count_responses_input_tokens
 
@@ -181,6 +182,224 @@ async def test_free_user_below_weekly_limit_allowed(client, verified_free_user_i
         headers={"Authorization": f"Bearer {created['key']}"},
     )
     assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_nomad_user_over_weekly_limit_rejected(client, verified_free_user_id, db_session):
+    """A user mapped to a paid tier is gated by that tier's weekly token budget."""
+    from backend.auth.session import create_session_token
+    from backend.db.models import User, UsageLog
+
+    user = await db_session.get(User, verified_free_user_id)
+    user.tier_id = "nomad"
+    await db_session.commit()
+
+    token = create_session_token(verified_free_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "nomad"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    db_session.add(
+        UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=600000, completion_tokens=0, total_tokens=600000)
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 403
+    assert "Weekly limit reached" in r.text
+
+
+@pytest.mark.asyncio
+async def test_nomad_user_over_monthly_limit_rejected(client, verified_free_user_id, db_session):
+    """The tier's monthly budget is enforced even when the weekly window looks fine."""
+    from datetime import datetime, timedelta, timezone
+    from backend.auth.session import create_session_token
+    from backend.db.models import User, UsageLog
+
+    user = await db_session.get(User, verified_free_user_id)
+    user.tier_id = "nomad"
+    await db_session.commit()
+
+    token = create_session_token(verified_free_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "nomad"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db_session.add_all(
+        [
+            # 100K today: inside the 500K weekly budget.
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=100000, completion_tokens=0, total_tokens=100000),
+            # 15 days ago: inside the 30-day window but outside the 7-day one.
+            UsageLog(
+                api_key_id=created["id"],
+                model="deepseek-v4-flash",
+                prompt_tokens=2100000,
+                completion_tokens=0,
+                total_tokens=2100000,
+                created_at=now - timedelta(days=15),
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 403
+    assert "Monthly limit reached" in r.text
+
+
+@pytest.mark.asyncio
+async def test_nomad_user_below_weekly_limit_allowed(client, verified_free_user_id, db_session):
+    """Users under their paid tier budget keep working."""
+    from backend.auth.session import create_session_token
+    from backend.db.models import User, UsageLog
+
+    user = await db_session.get(User, verified_free_user_id)
+    user.tier_id = "nomad"
+    await db_session.commit()
+
+    token = create_session_token(verified_free_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "nomad"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    db_session.add(
+        UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=1000, completion_tokens=0, total_tokens=1000)
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_nomad_user_weekly_limit_rolls_out(client, verified_free_user_id, db_session):
+    """Once usage leaves the 7-day window the weekly budget resets (sliding window)."""
+    from datetime import datetime, timedelta, timezone
+    from backend.auth.session import create_session_token
+    from backend.db.models import User, UsageLog
+
+    user = await db_session.get(User, verified_free_user_id)
+    user.tier_id = "nomad"
+    await db_session.commit()
+
+    token = create_session_token(verified_free_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": "nomad"},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    # 8 days ago: outside the 7-day weekly window, so it must not count.
+    db_session.add(
+        UsageLog(
+            api_key_id=created["id"],
+            model="deepseek-v4-flash",
+            prompt_tokens=600000,
+            completion_tokens=0,
+            total_tokens=600000,
+            created_at=now - timedelta(days=8),
+        )
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 200, r.text
+
+    # Now add usage inside the window: the same volume should block again.
+    db_session.add(
+        UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=600000, completion_tokens=0, total_tokens=600000)
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 403
+    assert "Weekly limit reached" in r.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tier_id,weekly,monthly",
+    [
+        ("nomad", 500000, 2170000),
+        ("dreamer", 1000000, 4350000),
+        ("entrepreneur", 3000000, 13040000),
+        ("angel", 10000000, 43450000),
+    ],
+)
+async def test_paid_tier_over_weekly_limit_rejected(client, verified_free_user_id, db_session, tier_id, weekly, monthly):
+    """Every paid tier enforces its own weekly/monthly token budget."""
+    from backend.auth.session import create_session_token
+    from backend.db.models import User, UsageLog
+
+    user = await db_session.get(User, verified_free_user_id)
+    user.tier_id = tier_id
+    await db_session.commit()
+
+    token = create_session_token(verified_free_user_id)
+    created = client.post(
+        "/admin/keys",
+        json={"name": tier_id},
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+
+    # Just over the tier's weekly budget, still under its monthly budget.
+    db_session.add(
+        UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=weekly + 1, completion_tokens=0, total_tokens=weekly + 1)
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 403, (tier_id, r.text)
+    assert "Weekly limit reached" in r.text
+
+    # Under budget -> allowed.
+    from sqlalchemy import delete
+
+    await db_session.execute(delete(UsageLog))
+    await db_session.commit()
+    db_session.add(
+        UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=100, completion_tokens=0, total_tokens=100)
+    )
+    await db_session.commit()
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {created['key']}"},
+    )
+    assert r.status_code == 200, (tier_id, r.text)
 
 
 def test_session_token_rejected_on_v1_chat(client, non_member_user_id):
@@ -1345,6 +1564,29 @@ def test_parse_image_toolcall_with_prose():
     assert out is not None
     assert out["content"] == "sunset beach"
     assert out["size"] == "1792x1024"
+
+
+def test_text_only_messages_strips_images_keeps_text():
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "draw a cat"},
+                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,AAAA"}},
+            ],
+        },
+        {"role": "assistant", "content": "ok"},
+    ]
+    out = _text_only_messages(messages)
+    assert out[0]["content"] == [{"type": "text", "text": "draw a cat"}]
+    assert out[1]["content"] == "ok"
+
+
+def test_text_only_messages_empties_image_only_message():
+    out = _text_only_messages(
+        [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "data:image/png;base64,BBBB"}}]}]
+    )
+    assert out[0]["content"] == ""
 
 
 def test_parse_image_toolcall_rejects_non_image_gen():

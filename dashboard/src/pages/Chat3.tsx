@@ -530,17 +530,21 @@ export default function Chat3() {
     setBusy(true)
     setIsVision(hasImage)
 
-    const history = messages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({
-        role: m.role,
-        content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
-      }))
+    const history = imageGen
+      ? []
+      : messages
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m) => ({
+            role: m.role,
+            content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
+          }))
     const body: Record<string, unknown> = {
       model: requestModel,
       max_tokens: 1024,
       stream: true,
-      messages: [...history, { role: 'user', content: buildContent(text, attachments) }],
+      messages: imageGen
+        ? [{ role: 'user', content: text }]
+        : [...history, { role: 'user', content: buildContent(text, attachments) }],
     }
     if (!hasImage) {
       if (thinking) {

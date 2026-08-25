@@ -210,21 +210,36 @@ async def get_usage_limits(
         ImageUsage.user_id == user_id, ImageUsage.created_at >= month_start
     )
     images_used = int((await db.execute(image_stmt)).scalar_one() or 0)
-    if user.is_owner or user.is_member:
+
+    tier_map = {t["id"]: t for t in TIER_OPTIONS}
+
+    # If the user carries a tier_id (from a Stripe subscription or the
+    # YouTube membership level→tier mapping) reflect that tier's real
+    # limits. Owner/YT-member users without a tier stay uncapped.
+    tier = tier_map.get(user.tier_id or "")
+    if tier and tier["id"] != "free":
+        current_tier_id = tier["id"]
+        weekly_limit = tier["weekly"]
+        monthly_limit = tier["monthly"]
+        image_quota = tier.get("image_quota", 0)
+    elif user.is_owner or user.is_member:
+        current_tier_id = None
+        weekly_limit = None
+        monthly_limit = None
         image_quota = 10000
-    elif user.is_paid:
-        tier_map = {t["id"]: t.get("image_quota", 0) for t in TIER_OPTIONS}
-        image_quota = tier_map.get(user.tier_id or "", tier_map["free"])
     else:
-        image_quota = next(t.get("image_quota", 0) for t in TIER_OPTIONS if t["id"] == "free")
+        current_tier_id = "free"
+        weekly_limit = settings.free_weekly_tokens
+        monthly_limit = settings.free_monthly_tokens
+        image_quota = tier_map["free"].get("image_quota", 0)
 
     is_free = plan == "free"
     return {
         "plan": plan,
         "is_free": is_free,
-        "current_tier_id": "free" if is_free else None,
-        "weekly_limit": settings.free_weekly_tokens if is_free else None,
-        "monthly_limit": settings.free_monthly_tokens if is_free else None,
+        "current_tier_id": current_tier_id,
+        "weekly_limit": weekly_limit,
+        "monthly_limit": monthly_limit,
         "weekly_used": weekly_used,
         "monthly_used": monthly_used,
         "image_quota": image_quota,

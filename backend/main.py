@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import json
 import time
 from contextlib import asynccontextmanager
 
@@ -36,9 +37,20 @@ async def lifespan(app: FastAPI):
             await member_sync_task
         except asyncio.CancelledError:
             pass
+        try:
+            from backend.http import close_clients
+
+            await close_clients()
+        except Exception:
+            pass
 
 
 app = FastAPI(title="Detroit LLM Gateway", version="0.1.0", lifespan=lifespan)
+
+
+@app.exception_handler(json.JSONDecodeError)
+async def _invalid_json_handler(request: Request, exc: json.JSONDecodeError):
+    return JSONResponse(status_code=400, content={"detail": "Request body must be valid JSON."})
 
 app.add_middleware(
     CORSMiddleware,
@@ -79,12 +91,13 @@ app.include_router(stripe_router)
 
 @app.get("/health")
 async def health():
-    import httpx
+    from backend.http import get_fetch_client
+
     sglang_ok = False
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            r = await client.get(f"{settings.sglang_url}/health")
-            sglang_ok = r.status_code == 200
+        client = get_fetch_client(timeout=5)
+        r = await client.get(f"{settings.sglang_url}/health")
+        sglang_ok = r.status_code == 200
     except Exception:
         pass
     return {"status": "ok", "sglang": sglang_ok, "members_url": settings.members_url}

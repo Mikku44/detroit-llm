@@ -12,6 +12,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
 import ApiKeyButtons from '../components/ApiKeyButtons'
 import { Skeleton } from '../components/ui/skeleton'
+import { Tooltip as UiTooltip, TooltipTrigger as UiTooltipTrigger, TooltipContent as UiTooltipContent } from '../components/ui/tooltip'
+import { CursorTooltip } from '../components/ui/cursor-tooltip'
 import { NumberTicker } from '../components/shadcn-space/number-ticker/number-ticker-01'
 
 interface UsageRow {
@@ -192,6 +194,24 @@ export default function Usage() {
     { requests: 0, tokens: 0 },
   )
 
+  const weekdayTotals = usage.reduce(
+    (acc, r) => {
+      const wd = new Date(`${r.date}T00:00:00`).getDay()
+      const cur = acc[wd] ?? { requests: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      cur.requests += r.requests
+      cur.prompt_tokens += r.prompt_tokens
+      cur.completion_tokens += r.completion_tokens
+      cur.total_tokens += r.total_tokens
+      acc[wd] = cur
+      return acc
+    },
+    {} as Record<number, { requests: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }>,
+  )
+
+  const tierInfo = limits?.current_tier_id
+    ? limits.tiers.find((t) => t.id === limits.current_tier_id)
+    : undefined
+
   const cellColor = (count: number) => {
     if (!count) return '#27272a'
     const pct = Math.round(20 + (count / Math.max(1, punchMax)) * 80)
@@ -283,7 +303,7 @@ export default function Usage() {
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-8">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-3">
-            <h3 className="text-lg font-semibold text-zinc-100">Plan &amp; Weekly Quota</h3>
+            <h3 className="text-lg font-semibold text-zinc-100">Plan &amp; Limits</h3>
             <span
               className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
                 limits?.plan === 'free'
@@ -293,7 +313,7 @@ export default function Usage() {
                     : 'bg-emerald-900/50 text-emerald-400'
               }`}
             >
-              {limits ? PLAN_LABEL[limits.plan] : '…'}
+              {limits ? (tierInfo ? tierInfo.name : PLAN_LABEL[limits.plan]) : '…'}
             </span>
           </div>
           <button
@@ -312,28 +332,29 @@ export default function Usage() {
               <Skeleton className="h-4 w-40" />
               <Skeleton className="h-2.5 w-full" />
             </div>
-          ) : limits.is_free && limits.weekly_limit != null && limits.monthly_limit != null ? (
-            <>
-              <QuotaBar label="Tokens / week" used={limits.weekly_used} limit={limits.weekly_limit} />
-              <QuotaBar label="Tokens / month" used={limits.monthly_used} limit={limits.monthly_limit} />
-              {limits.image_quota != null && (
-                <QuotaBar label="Images / month" used={limits.images_used ?? 0} limit={limits.image_quota} />
-              )}
-              {(limits.weekly_used >= limits.weekly_limit ||
-                limits.monthly_used >= limits.monthly_limit) && (
-                <p className="text-xs text-red-400">
-                  You&apos;ve hit the free limit. Upgrade to a paid membership for more usage.
-                </p>
-              )}
-            </>
           ) : (
             <>
-              <p className="text-sm text-zinc-400">
-                Your {PLAN_LABEL[limits.plan]} plan has no weekly or monthly token cap.
-              </p>
+              {limits.weekly_limit != null && limits.monthly_limit != null ? (
+                <>
+                  <QuotaBar label="Tokens / week" used={limits.weekly_used} limit={limits.weekly_limit} />
+                  <QuotaBar label="Tokens / month" used={limits.monthly_used} limit={limits.monthly_limit} />
+                </>
+              ) : (
+                <p className="text-sm text-zinc-400">
+                  Your {PLAN_LABEL[limits.plan]} plan has no weekly or monthly token cap.
+                </p>
+              )}
               {limits.image_quota != null && (
                 <QuotaBar label="Images / month" used={limits.images_used ?? 0} limit={limits.image_quota} />
               )}
+              {limits.weekly_limit != null &&
+                limits.monthly_limit != null &&
+                (limits.weekly_used >= limits.weekly_limit ||
+                  limits.monthly_used >= limits.monthly_limit) && (
+                  <p className="text-xs text-red-400">
+                    You&apos;ve hit your {tierInfo?.name ?? 'plan'} token limit. Upgrade to a higher tier for more usage.
+                  </p>
+                )}
             </>
           )}
         </div>
@@ -433,13 +454,26 @@ export default function Usage() {
                 </TableHeader>
                 <TableBody>
                   {usage.map((r) => (
-                    <TableRow key={r.date}>
-                      <TableCell>{r.date}</TableCell>
-                      <TableCell>{r.requests}</TableCell>
-                      <TableCell>{r.prompt_tokens.toLocaleString()}</TableCell>
-                      <TableCell>{r.completion_tokens.toLocaleString()}</TableCell>
-                      <TableCell>{r.total_tokens.toLocaleString()}</TableCell>
-                    </TableRow>
+                    <UiTooltip key={r.date}>
+                      <UiTooltipTrigger asChild>
+                        <TableRow>
+                          <TableCell>{r.date}</TableCell>
+                          <TableCell>{r.requests}</TableCell>
+                          <TableCell>{r.prompt_tokens.toLocaleString()}</TableCell>
+                          <TableCell>{r.completion_tokens.toLocaleString()}</TableCell>
+                          <TableCell>{r.total_tokens.toLocaleString()}</TableCell>
+                        </TableRow>
+                      </UiTooltipTrigger>
+                      <UiTooltipContent>
+                        <div className="flex flex-col gap-0.5">
+                          <div className="font-semibold">{r.date}</div>
+                          <div>Requests: {r.requests}</div>
+                          <div>Prompt: {r.prompt_tokens.toLocaleString()}</div>
+                          <div>Completion: {r.completion_tokens.toLocaleString()}</div>
+                          <div>Total: {r.total_tokens.toLocaleString()}</div>
+                        </div>
+                      </UiTooltipContent>
+                    </UiTooltip>
                   ))}
                 </TableBody>
               </Table>
@@ -453,7 +487,34 @@ export default function Usage() {
               <p className="text-zinc-600 text-sm">No usage data yet.</p>
             ) : (
               <div>
-                <div className="flex flex-col gap-[3px]">
+                <CursorTooltip
+                  containerClassName="flex flex-col gap-[3px]"
+                  content={({ day, hour }) => {
+                    const wd = Number(day)
+                    const h = Number(hour)
+                    const count = punchcard[wd]?.[h] ?? 0
+                    const dayTotals = weekdayTotals[wd]
+                    return (
+                      <div className="flex flex-col gap-0.5">
+                        <div className="font-semibold">
+                          {WEEKDAY_LABELS[WEEKDAY_ORDER.indexOf(wd)]} {String(h).padStart(2, '0')}:00
+                        </div>
+                        <div>
+                          {count} request{count === 1 ? '' : 's'}
+                        </div>
+                        {dayTotals && (
+                          <>
+                            <div className="my-1 border-t border-zinc-300" />
+                            <div>Requests: {dayTotals.requests}</div>
+                            <div>Prompt: {dayTotals.prompt_tokens.toLocaleString()}</div>
+                            <div>Completion: {dayTotals.completion_tokens.toLocaleString()}</div>
+                            <div>Total: {dayTotals.total_tokens.toLocaleString()}</div>
+                          </>
+                        )}
+                      </div>
+                    )
+                  }}
+                >
                   <div className="grid grid-cols-[40px_repeat(24,1fr)] gap-[3px]">
                     <div />
                     {HOURS.map((h) => (
@@ -470,15 +531,17 @@ export default function Usage() {
                         return (
                           <div
                             key={h}
+                            data-tip
+                            data-tip-day={wd}
+                            data-tip-hour={h}
                             className="aspect-square rounded-[3px]"
                             style={{ backgroundColor: cellColor(count) }}
-                            title={`${WEEKDAY_LABELS[wi]} ${String(h).padStart(2, '0')}:00 — ${count} request${count === 1 ? '' : 's'}`}
                           />
                         )
                       })}
                     </div>
                   ))}
-                </div>
+                </CursorTooltip>
                 <div className="mt-3 flex items-center gap-1.5 text-[10px] text-zinc-500">
                   <span>Less</span>
                   {[0, 0.25, 0.5, 0.75, 1].map((t) => (

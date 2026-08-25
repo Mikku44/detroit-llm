@@ -2,7 +2,11 @@ from sqlalchemy import event, text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 
+import logging
+
 from backend.config import settings
+
+logger = logging.getLogger("uvicorn.error")
 
 
 def _is_postgres(url: str) -> bool:
@@ -11,7 +15,15 @@ def _is_postgres(url: str) -> bool:
 
 def _make_engine(url: str):
     if _is_postgres(url):
-        return create_async_engine(url, echo=False, pool_pre_ping=True)
+        return create_async_engine(
+            url,
+            echo=False,
+            pool_pre_ping=True,
+            pool_size=10,
+            max_overflow=20,
+            pool_recycle=300,
+            pool_timeout=30,
+        )
     return create_async_engine(url, echo=False)
 
 
@@ -92,6 +104,14 @@ async def init_db():
     async with engine.begin() as conn:
         from backend.db.models import User, ApiKey, UsageLog, ImageUsage, Payment
         await conn.run_sync(Base.metadata.create_all)
+
+        # Index for the daily usage-log housekeeping job (cleanup_usage.py).
+        try:
+            await conn.execute(
+                text("CREATE INDEX IF NOT EXISTS ix_usage_logs_created_at ON usage_logs (created_at)")
+            )
+        except Exception:
+            logger.warning("Failed to create ix_usage_logs_created_at", exc_info=True)
 
         if settings.database_url.startswith("sqlite"):
             try:

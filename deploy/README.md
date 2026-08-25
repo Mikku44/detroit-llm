@@ -83,3 +83,28 @@ cd deploy && docker compose up -d --build
 ## Scaling note
 - `RATE_LIMIT_PER_MINUTE` and free-tier budgets are in `.env`.
 - The in-memory rate limiter means **run 1 backend container** only. For more capacity, move the limiter to Redis.
+
+## Daily usage-log housekeeping (cron)
+
+The per-tier weekly/monthly token limits use a **sliding window** — usage older
+than 7/30 days drops out of the sums automatically, so users unblock themselves
+even without any job. A daily cronjob still runs at **00:00 UTC** to prune usage
+logs past the retention window (35 days by default), keeping the database small
+and guaranteeing the rollover is processed even when nobody sends requests.
+
+Install on the VPS host (crontab -e):
+
+```cron
+0 0 * * * cd /opt/detroit-llm/deploy && docker compose exec -T backend python -m backend.scripts.cleanup_usage >> /var/log/detroit-cleanup.log 2>&1
+```
+
+The backend container already has the code at `/app` and reads `DATABASE_URL`
+from the compose env. To preview what the job would delete:
+
+```bash
+docker compose exec -T backend python -m backend.scripts.cleanup_usage --dry-run
+```
+
+Retention is intentionally a few days past the 30-day monthly window, so
+pruning never removes rows a live enforcement query could still need.
+

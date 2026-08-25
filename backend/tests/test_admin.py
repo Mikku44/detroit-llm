@@ -188,6 +188,26 @@ def test_usage_limits_member_unlimited(client, owner_user_id):
     assert body["monthly_limit"] is None
 
 
+async def test_usage_limits_reflects_tier(client, owner_user_id, db_session):
+    """A user carrying a tier_id sees that tier's limits on the usage page."""
+    from backend.auth.session import create_session_token
+    from backend.db.models import User
+
+    user = await db_session.get(User, owner_user_id)
+    user.tier_id = "nomad"
+    await db_session.commit()
+
+    token = create_session_token(owner_user_id)
+    body = client.get(
+        "/admin/usage/limits",
+        headers={"Authorization": f"Bearer {token}"},
+    ).json()
+    assert body["current_tier_id"] == "nomad"
+    assert body["weekly_limit"] == 500000
+    assert body["monthly_limit"] == 2170000
+    assert body["image_quota"] == 10
+
+
 def test_balances_non_owner_rejected(client, non_member_user_id):
     """Only owners may read the provider balances endpoint."""
     from backend.auth.session import create_session_token
