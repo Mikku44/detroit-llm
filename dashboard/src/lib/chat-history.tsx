@@ -8,7 +8,7 @@ export type Message = {
   reasoning?: string
   error?: boolean
   cta?: { label: string; href: string; external?: boolean }
-  attachments?: Array<{ id: string; name: string; kind: 'image' | 'text'; dataUrl?: string; text?: string; size: number }>
+  attachments?: Array<{ id: string; name: string; kind: 'image' | 'video' | 'text'; dataUrl?: string; text?: string; size: number }>
   model?: string
   durationMs?: number
   finish_reason?: string | null
