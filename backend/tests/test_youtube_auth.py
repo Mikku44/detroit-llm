@@ -298,3 +298,21 @@ async def test_callback_happy_path_covers_existing_user(
 
     result = await db_session.execute(select(User).where(User.google_sub == sub))
     assert len(result.scalars().all()) == 1
+
+
+# --- /auth/youtube/login/user ------------------------------------------------
+
+
+def test_user_login_requests_members_scope(client):
+    from urllib.parse import parse_qs, urlparse
+
+    from backend.auth.youtube import YOUTUBE_MEMBERS_SCOPE
+
+    r = client.get("/auth/youtube/login/user?redirect=dashboard", follow_redirects=False)
+    assert r.status_code in (302, 303, 307)
+    qs = parse_qs(urlparse(r.headers["location"]).query)
+    scopes = set(qs["scope"][0].split())
+    assert YOUTUBE_MEMBERS_SCOPE in scopes
+    assert "openid" in scopes and "email" in scopes and "profile" in scopes
+    # state carries the dashboard redirect so the callback returns to the SPA.
+    assert qs.get("state") == ["redirect=dashboard"]

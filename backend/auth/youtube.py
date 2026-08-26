@@ -14,6 +14,8 @@ from backend.config import settings, BASE_DIR
 from backend.db.database import get_db
 from backend.db.models import User
 from backend.auth.session import create_session_token, require_session
+from urllib.parse import urlencode
+
 
 router = APIRouter(prefix="/auth/youtube", tags=["auth"])
 
@@ -184,29 +186,40 @@ def _load_persisted_env(key: str) -> str:
 
 
 def _get_owner_flow_url() -> str:
-    return (
-        f"{GOOGLE_AUTH_URL}"
-        f"?client_id={settings.google_client_id}"
-        f"&redirect_uri={settings.redirect_uri}"
-        f"&response_type=code"
-        f"&scope=openid%20email%20profile%20{YOUTUBE_MEMBERS_SCOPE}%20{YOUTUBE_READONLY_SCOPE}"
-        f"&access_type=offline"
-        f"&prompt=consent"
-    )
+    params = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": settings.redirect_uri,
+        "response_type": "code",
+        "scope": " ".join([
+            "openid",
+            "email",
+            "profile",
+            YOUTUBE_MEMBERS_SCOPE,
+            YOUTUBE_READONLY_SCOPE,
+        ]),
+        "access_type": "offline",
+        "prompt": "consent",
+    }
 
+    return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
 
-def _get_user_flow_url(state: str = "") -> str:
-    url = (
-        f"{GOOGLE_AUTH_URL}"
-        f"?client_id={settings.google_client_id}"
-        f"&redirect_uri={settings.redirect_uri}"
-        f"&response_type=code"
-        f"&scope=openid%20email%20profile%20{YOUTUBE_READONLY_SCOPE}"
-        f"&access_type=online"
-    )
-    if state:
-        url += f"&state={state}"
-    return url
+def _get_user_flow_url(state: str) -> str:
+    params = {
+        "client_id": settings.google_client_id,
+        "redirect_uri": settings.redirect_uri,
+        "response_type": "code",
+        "scope": " ".join([
+            "openid",
+            "email",
+            "profile",
+            YOUTUBE_MEMBERS_SCOPE,
+            YOUTUBE_READONLY_SCOPE,
+        ]),
+        "access_type": "online",
+        "state": state,
+    }
+
+    return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
 
 
 async def _exchange_code(client: httpx.AsyncClient, code: str) -> dict:
