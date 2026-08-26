@@ -1,6 +1,21 @@
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _clear_member_tables(client):
+    """Wipe channel_members/member_levels before+after each test.
+
+    These tests share the session-scoped test DB, and the member list now lives
+    in the DB — leftover rows would leak into other test modules.
+    """
+    import asyncio
+    import backend.auth.members as members
+
+    asyncio.run(members._db_clear_members())
+    yield
+    asyncio.run(members._db_clear_members())
+
+
 def test_fetch_member_ids_falls_back_to_stored(monkeypatch, tmp_path):
     """Without a refresh token, member IDs come from the stored JSON file."""
     import backend.auth.members as members
@@ -103,6 +118,102 @@ def test_check_api_status_reports_403(client, session_token, monkeypatch):
     body = r.json()
     assert body["available"] is False
     assert body["reason"] == "api_error"
+
+
+def test_db_save_and_load_members_roundtrip(client):
+    """The member list is persisted to the channel_members table."""
+    import asyncio
+    import backend.auth.members as members
+
+    asyncio.run(
+        members._db_save_members(
+            {"UCaaa", "UCbbb"},
+            {"UCaaa": "nomad", "UCbbb": "dreamer"},
+        )
+    )
+
+    async def check():
+        tiers = await members._db_load_member_tiers()
+        ids = set(tiers)
+        return ids, tiers
+
+    ids, tiers = asyncio.run(check())
+    assert ids == {"UCaaa", "UCbbb"}
+    assert tiers["UCaaa"] == "nomad"
+    assert tiers["UCbbb"] == "dreamer"
+
+
+def test_db_clear_members_removes_rows(client):
+    import asyncio
+    import backend.auth.members as members
+
+    asyncio.run(members._db_save_members({"UCkeep"}))
+    asyncio.run(members._db_clear_members())
+
+    async def check():
+        return set(await members._db_load_member_tiers())
+
+    assert asyncio.run(check()) == set()
+
+
+def test_db_save_level_tiers_roundtrip(client):
+    import asyncio
+    import backend.auth.members as members
+
+    asyncio.run(members._db_save_level_tiers({"L1": "nomad", "L2": "angel"}))
+    assert asyncio.run(members._db_load_level_tiers()) == {"L1": "nomad", "L2": "angel"}
+
+
+def test_fetch_member_ids_warms_cache_from_db(client, monkeypatch):
+    """With no refresh token, fetch_member_ids loads the list from the DB."""
+    import asyncio
+    import backend.auth.members as members
+
+    asyncio.run(members._db_save_members({"UCdb1", "UCdb2"}, {"UCdb1": "nomad"}))
+    monkeypatch.setattr(members, "settings", type("S", (), {"owner_refresh_token": ""})())
+    members._cache_loaded = False
+    members._member_cache = set()
+
+    ids = asyncio.run(members.fetch_member_ids())
+    assert ids == {"UCdb1", "UCdb2"}
+
+
+def test_set_stored_members_persists_to_db(client, session_token, monkeypatch):
+    """POST /auth/youtube/members writes the member list into the DB."""
+    import asyncio
+    from backend.auth.session import create_session_token
+    from backend.db.database import async_session
+    from backend.db.models import ChannelMember, User
+    from sqlalchemy import select
+
+    import backend.auth.members as members
+
+    # Need an owner user whose session token maps to it.
+    owner_id = "owner-db-test"
+    token = create_session_token(owner_id)
+
+    async def seed():
+        async with async_session() as db:
+            db.add(User(id=owner_id, google_email="owner-db@test.local", is_owner=True, is_member=True))
+            await db.commit()
+
+    asyncio.run(seed())
+
+    r = client.post(
+        "/auth/youtube/members",
+        json={"channel_ids": ["UCx1", "UCx2"], "tiers": {"UCx1": "nomad", "UCx2": "angel"}},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert r.status_code == 200
+
+    async def check():
+        async with async_session() as db:
+            result = await db.execute(select(ChannelMember))
+            return {m.channel_id: m.tier_id for m in result.scalars()}
+
+    rows = asyncio.run(check())
+    assert rows.get("UCx1") == "nomad"
+    assert rows.get("UCx2") == "angel"
 
 
 def test_check_api_status_reports_ok(client, session_token, monkeypatch):

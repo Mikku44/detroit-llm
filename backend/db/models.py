@@ -81,6 +81,38 @@ class ImageUsage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
 
 
+class ChannelMember(Base):
+    """One row per current YouTube member channel ID.
+
+    Serves as the persisted source of truth for the member list, replacing the
+    members.json fallback file. tier_id maps the member's YouTube level to a
+    gateway tier (nomad/dreamer/entrepreneur/angel).
+    """
+
+    __tablename__ = "channel_members"
+
+    channel_id: Mapped[str] = mapped_column(String, primary_key=True)
+    tier_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    level_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+class MemberLevel(Base):
+    """YouTube membership level ID -> gateway tier map.
+
+    Some members.list responses only expose a level ID (highestAccessibleLevel)
+    without a display name. This table resolves those IDs to tiers.
+    """
+
+    __tablename__ = "member_levels"
+
+    level_id: Mapped[str] = mapped_column(String, primary_key=True)
+    tier_id: Mapped[str] = mapped_column(String, nullable=False, default="nomad")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
 class Payment(Base):
     """Payment history from Stripe subscriptions and one-time payments."""
 

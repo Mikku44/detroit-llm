@@ -14,7 +14,7 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from backend.auth.youtube import (
     _fetch_member_channel_ids,
@@ -26,7 +26,7 @@ from backend.auth.youtube import (
 )
 from backend.config import settings
 from backend.db.database import async_session
-from backend.db.models import User
+from backend.db.models import ChannelMember, MemberLevel, User
 
 log = logging.getLogger("uvicorn.error")
 
@@ -36,20 +36,98 @@ _tier_cache: dict[str, str] = {}
 _cache_loaded = False
 
 
-def _get_member_ids_sync() -> set[str]:
-    """Return the currently cached member ID set (loaded from storage if needed)."""
+async def _db_load_member_ids() -> set[str]:
+    """Load all member channel IDs from the channel_members table."""
+    try:
+        async with async_session() as db:
+            result = await db.execute(select(ChannelMember.channel_id))
+            return {row[0] for row in result.all()}
+    except Exception as exc:
+        log.warning("member sync: DB load failed (%s)", exc)
+        return set()
+
+
+async def _db_load_member_tiers() -> dict[str, str]:
+    """Load channel_id -> tier_id from the channel_members table."""
+    try:
+        async with async_session() as db:
+            result = await db.execute(select(ChannelMember))
+            return {m.channel_id: m.tier_id for m in result.scalars() if m.tier_id}
+    except Exception as exc:
+        log.warning("member sync: DB load failed (%s)", exc)
+        return {}
+
+
+async def _db_load_level_tiers() -> dict[str, str]:
+    """Load level_id -> tier_id from the member_levels table."""
+    try:
+        async with async_session() as db:
+            result = await db.execute(select(MemberLevel))
+            return {m.level_id: m.tier_id for m in result.scalars()}
+    except Exception as exc:
+        log.warning("member sync: DB levels load failed (%s)", exc)
+        return {}
+
+
+async def _db_save_members(member_ids: set[str], tiers: dict[str, str] | None = None) -> None:
+    """Replace the member list in the channel_members table.
+
+    `member_ids` is always the FULL current list (from the YouTube API or the
+    owner's manual paste), so the table is cleared and re-seeded each time.
+    """
+    tiers = tiers or {}
+    try:
+        async with async_session() as db:
+            await db.execute(delete(ChannelMember))
+            for cid in member_ids:
+                db.add(ChannelMember(channel_id=cid, tier_id=tiers.get(cid)))
+            await db.commit()
+    except Exception as exc:
+        log.warning("member sync: DB save failed (%s)", exc)
+
+
+async def _db_save_level_tiers(levels: dict[str, str]) -> None:
+    try:
+        async with async_session() as db:
+            await db.execute(delete(MemberLevel))
+            for level_id, tier in levels.items():
+                db.add(MemberLevel(level_id=level_id, tier_id=tier))
+            await db.commit()
+    except Exception as exc:
+        log.warning("member sync: DB levels save failed (%s)", exc)
+
+
+async def _db_clear_members() -> None:
+    try:
+        async with async_session() as db:
+            await db.execute(delete(ChannelMember))
+            await db.execute(delete(MemberLevel))
+            await db.commit()
+    except Exception as exc:
+        log.warning("member sync: DB clear failed (%s)", exc)
+
+
+async def _load_cache_from_db() -> None:
+    """Populate the in-memory cache from the DB, falling back to the JSON file."""
     global _member_cache, _tier_cache, _cache_loaded
-    if not _cache_loaded:
-        _member_cache = _load_stored_member_ids()
-        _tier_cache = _load_stored_member_tiers()
+    member_ids = await _db_load_member_ids()
+    if member_ids:
+        _member_cache = member_ids
+        _tier_cache = await _db_load_member_tiers()
         _cache_loaded = True
+        return
+    # Legacy/fallback: read from members.json (file-based storage from before DB).
+    _member_cache = _load_stored_member_ids()
+    _tier_cache = _load_stored_member_tiers()
+    _cache_loaded = True
+
+
+def _get_member_ids_sync() -> set[str]:
+    """Return the currently cached member ID set (assumes cache was loaded)."""
     return _member_cache
 
 
 def _get_member_tiers_sync() -> dict[str, str]:
-    global _cache_loaded
-    if not _cache_loaded:
-        _get_member_ids_sync()
     return _tier_cache
 
 
@@ -73,7 +151,7 @@ async def _refresh_member_ids_from_api() -> bool:
         return False
 
     if member_ids:
-        _save_member_cache(member_ids, tiers)
+        await _save_member_cache(member_ids, tiers)
         return True
     return False
 
@@ -130,7 +208,7 @@ async def check_api_status() -> dict:
             "detail": f"{type(exc).__name__}: {exc}",
         }
     if member_ids:
-        _save_member_cache(member_ids, tiers)
+        await _save_member_cache(member_ids, tiers)
     return {
         "available": True,
         "reason": "ok",
@@ -139,11 +217,13 @@ async def check_api_status() -> dict:
     }
 
 
-def _save_member_cache(member_ids: set[str], tiers: dict[str, str] | None = None) -> None:
+async def _save_member_cache(member_ids: set[str], tiers: dict[str, str] | None = None) -> None:
     global _member_cache, _tier_cache, _cache_loaded
     _member_cache = set(member_ids)
     _tier_cache = dict(tiers or {})
     _cache_loaded = True
+    # Persist to the DB (source of truth), then the JSON file as a legacy fallback.
+    await _db_save_members(member_ids, tiers or {})
     try:
         _save_stored_member_ids(member_ids, tiers or {})
     except Exception as exc:
@@ -153,19 +233,23 @@ def _save_member_cache(member_ids: set[str], tiers: dict[str, str] | None = None
 async def fetch_member_ids(force_api: bool = False) -> set[str]:
     """Return the freshest set of member channel IDs.
 
-    Tries the live API; on failure falls back to the persisted JSON list.
+    Tries the live API; on failure falls back to the DB (then the JSON file).
     """
-    if force_api or not _cache_loaded:
+    if force_api:
         if await _refresh_member_ids_from_api():
             return _member_cache
+    if not _cache_loaded:
+        await _load_cache_from_db()
     return _get_member_ids_sync()
 
 
 async def fetch_member_tiers(force_api: bool = False) -> dict[str, str]:
     """Return channel ID -> tier_id for all current members."""
-    if force_api or not _cache_loaded:
+    if force_api:
         if await _refresh_member_ids_from_api():
             return _tier_cache
+    if not _cache_loaded:
+        await _load_cache_from_db()
     return _get_member_tiers_sync()
 
 

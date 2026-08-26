@@ -427,7 +427,12 @@ async def _is_youtube_member(client: httpx.AsyncClient, user_channel_id: str | N
         except Exception:
             member_ids = set()
     if not member_ids:
-        member_ids = _load_stored_member_ids()
+        # Fallback: DB-stored member list, then the legacy JSON file.
+        from backend.auth.members import _db_load_member_ids
+
+        member_ids = await _db_load_member_ids()
+        if not member_ids:
+            member_ids = _load_stored_member_ids()
     return user_channel_id in member_ids
 
 
@@ -573,16 +578,29 @@ async def verify_members(
         raise HTTPException(status_code=403, detail="Owner access required")
 
     member_ids: set[str] = set()
+    tiers: dict[str, str] = {}
     if settings.owner_refresh_token:
         async with httpx.AsyncClient() as client:
             access_token = await _get_owner_access_token(client)
             if access_token:
                 try:
                     member_ids = await _fetch_member_channel_ids(client, access_token)
+                    tiers = await _fetch_member_tiers(client, access_token)
                 except Exception:
                     member_ids = set()
+                    tiers = {}
     if not member_ids:
-        member_ids = _load_stored_member_ids()
+        from backend.auth.members import _db_load_member_ids, _db_load_member_tiers
+
+        member_ids = await _db_load_member_ids()
+        tiers = await _db_load_member_tiers()
+        if not member_ids:
+            member_ids = _load_stored_member_ids()
+    if member_ids:
+        # Persist the freshest list into the DB (source of truth) + JSON fallback.
+        from backend.auth.members import _db_save_members
+
+        await _db_save_members(member_ids, tiers or {})
 
     stmt = select(User)
     result = await db.execute(stmt)
@@ -611,7 +629,12 @@ async def get_stored_members(
     if not owner or not owner.is_owner:
         raise HTTPException(status_code=403, detail="Owner access required")
 
-    member_ids = _load_stored_member_ids()
+    # Read from the DB (source of truth), falling back to the JSON file.
+    from backend.auth.members import _db_load_member_ids
+
+    member_ids = await _db_load_member_ids()
+    if not member_ids:
+        member_ids = _load_stored_member_ids()
     return JSONResponse({"total_members": len(member_ids), "channel_ids": sorted(member_ids)})
 
 
@@ -665,6 +688,10 @@ async def set_stored_members(
             if display_name:
                 tiers[channel_id] = _tier_id_from_display_name(display_name)
 
+    # Persist to the DB (source of truth) + JSON fallback.
+    from backend.auth.members import _db_save_members
+
+    await _db_save_members(member_ids, tiers or {})
     _save_stored_member_ids(member_ids, tiers or None)
     return JSONResponse({"total_members": len(member_ids), "channel_ids": sorted(member_ids)})
 
@@ -697,7 +724,10 @@ async def set_stored_levels(
             detail="No levels found. Paste the membershipsLevelList JSON response or a levels map.",
         )
 
-    # Persist levels alongside the current member list.
+    # Persist levels into the DB (source of truth) + JSON fallback.
+    from backend.auth.members import _db_save_level_tiers
+
+    await _db_save_level_tiers(levels)
     member_ids = _load_stored_member_ids()
     tiers = _load_stored_member_tiers()
     _save_stored_member_ids(member_ids, tiers, levels)
@@ -715,6 +745,10 @@ async def clear_stored_members(
     if not owner or not owner.is_owner:
         raise HTTPException(status_code=403, detail="Owner access required")
 
+    # Clear the DB rows + the legacy JSON file.
+    from backend.auth.members import _db_clear_members
+
+    await _db_clear_members()
     path = _members_json_path()
     if os.path.exists(path):
         os.remove(path)

@@ -104,7 +104,15 @@ async def _postgres_alter(conn, columns: tuple[tuple[str, str], ...]) -> None:
 
 async def init_db():
     async with engine.begin() as conn:
-        from backend.db.models import User, ApiKey, UsageLog, ImageUsage, Payment
+        from backend.db.models import (
+            User,
+            ApiKey,
+            UsageLog,
+            ImageUsage,
+            Payment,
+            ChannelMember,
+            MemberLevel,
+        )
         await conn.run_sync(Base.metadata.create_all)
 
         # Index for the daily usage-log housekeeping job (cleanup_usage.py).
