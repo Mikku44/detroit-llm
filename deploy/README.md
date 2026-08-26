@@ -108,3 +108,17 @@ docker compose exec -T backend python -m backend.scripts.cleanup_usage --dry-run
 Retention is intentionally a few days past the 30-day monthly window, so
 pruning never removes rows a live enforcement query could still need.
 
+## Member list storage
+
+The member list is persisted in the `channel_members` / `member_levels` tables
+(the `members.json` file is now only a legacy fallback). After a fresh deploy,
+seed the DB once from the stored JSON so existing members keep access:
+
+```bash
+docker compose exec -T backend python -m backend.scripts.seed_members --dry-run  # preview
+docker compose exec -T backend python -m backend.scripts.seed_members             # seed
+```
+
+Safe to re-run — the table is replaced with the file's current contents. The
+background sync task re-writes it automatically on every YouTube API refresh.
+
