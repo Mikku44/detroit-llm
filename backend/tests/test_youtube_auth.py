@@ -227,6 +227,24 @@ def test_callback_oauth_error_without_redirect_returns_400(client):
     assert "OAuth error" in r.json()["detail"]
 
 
+def test_callback_localhost_dev_keeps_configured_dashboard(monkeypatch):
+    """Local dev: callback on :8000, configured SPA on :5173 -> stay on :5173."""
+    from fastapi.testclient import TestClient
+
+    from backend.config import settings
+    from backend.main import app
+
+    monkeypatch.setattr(settings, "dashboard_url", "http://localhost:5173")
+    client = TestClient(app, base_url="http://localhost:8000")
+    r = client.get(
+        "/auth/youtube/callback",
+        params={"error": "access_denied", "state": "redirect=dashboard"},
+        follow_redirects=False,
+    )
+    assert r.status_code in (302, 303, 307)
+    assert r.headers["location"] == "http://localhost:5173/callback?error=access_denied"
+
+
 async def test_callback_happy_path_covers_existing_user(
     client,
     monkeypatch,

@@ -427,15 +427,20 @@ def _is_owner(email: str) -> bool:
 def _public_dashboard_url(request: Request) -> str:
     """Resolve the dashboard base URL to redirect back to after OAuth.
 
-    Prefers the configured DASHBOARD_URL. When it is still the localhost
-    dev default (misconfigured/unset in prod), derive the base from the
-    request host instead — the OAuth callback always arrives on the public
-    host, so this never bounces users back to localhost.
+    Prefers the configured DASHBOARD_URL. When it is still a localhost
+    dev value but the OAuth callback arrived on a public host (i.e.
+    DASHBOARD_URL was left unset in production), derive the base from the
+    request host instead — this never bounces prod users back to localhost.
+
+    When both the config AND the callback are on localhost (local dev:
+    callback on :8000, SPA on :5173), the configured value is trusted so
+    dev login still lands on the frontend, not the API port.
     """
     base = settings.dashboard_url.strip()
-    if "localhost" in base or "127.0.0.1" in base:
+    netloc = request.url.netloc
+    is_public = "localhost" not in netloc and "127.0.0.1" not in netloc
+    if ("localhost" in base or "127.0.0.1" in base) and is_public:
         scheme = request.url.scheme or "https"
-        netloc = request.url.netloc
         base = f"{scheme}://{netloc}"
     return base.rstrip("/")
 
