@@ -17,7 +17,7 @@ interface Cta {
 interface Attachment {
   id: string
   name: string
-  kind: 'image' | 'text'
+  kind: 'image' | 'video' | 'text'
   dataUrl?: string
   text?: string
   size: number
@@ -48,39 +48,61 @@ interface ModelMeta {
   badges: string[]
 }
 
+const ALLOWED_CHAT_MODELS = new Set([
+  'deepseek-v4-pro',
+  'deepseek-v4-flash',
+  'deepseek-v4-flash-vision-exp',
+  'qwen3.7-flash',
+  'z-image-turbo',
+  'stealth/ox-alpha',
+])
+
 const MODEL_META: Record<string, ModelMeta> = {
   'deepseek-v4-pro': {
     name: 'DeepSeek V4 Pro',
-    desc: 'Most capable — complex reasoning, coding & deep analysis',
-    badges: ['reasoning'],
+    desc: 'Text — most capable for reasoning & coding',
+    badges: ['text'],
   },
   'deepseek-v4-flash': {
     name: 'DeepSeek V4 Flash',
-    desc: 'Fast & lightweight — for daily use and quick Q&A',
-    badges: ['fast'],
+    desc: 'Text — fast & lightweight for daily use',
+    badges: ['text', 'fast'],
+  },
+  'deepseek-v4-flash-vision-exp': {
+    name: 'DeepSeek V4 Vision',
+    desc: 'Text + Image — understands images & text',
+    badges: ['text', 'image'],
   },
   'qwen3.7-flash': {
     name: 'Qwen 3.7 Flash',
-    desc: 'Alibaba Qwen — fast, with thinking mode support',
-    badges: ['fast'],
+    desc: 'Text + Image + Video — Alibaba Qwen with thinking mode',
+    badges: ['text', 'image', 'video'],
+  },
+  'z-image-turbo': {
+    name: 'Z-Image Turbo',
+    desc: 'Image — DashScope text-to-image',
+    badges: ['image'],
   },
   'stealth/ox-alpha': {
     name: 'Stealth Ox-Alpha',
-    desc: 'stealth/ox-alpha model',
-    badges: ['reasoning'],
+    desc: 'Text + Image + Video — full multimodal',
+    badges: ['text', 'image', 'video'],
   },
   'gemini-2.5-flash': {
     name: 'Gemini 2.5 Flash',
-    desc: 'Understands images & text',
-    badges: ['vision'],
+    desc: 'Text + Image — understands images & text',
+    badges: ['text', 'image'],
   },
 }
 
 const BADGE_STYLES: Record<string, string> = {
-  reasoning: 'font-bold bg-white text-indigo-700',
-  vision: 'font-bold bg-white text-emerald-700',
-  fast: 'font-bold bg-white text-sky-700',
-  default: 'font-bold bg-white text-zinc-700',
+  text: 'font-medium bg-zinc-800/60 text-zinc-400 border border-zinc-700/50',
+  image: 'font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/15',
+  video: 'font-medium bg-orange-500/10 text-orange-400 border border-orange-500/15',
+  reasoning: 'font-medium bg-violet-500/10 text-violet-400 border border-violet-500/15',
+  vision: 'font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/15',
+  fast: 'font-medium bg-sky-500/10 text-sky-400 border border-sky-500/15',
+  default: 'font-medium bg-zinc-800/60 text-zinc-500 border border-zinc-700/50',
 }
 
 const SUGGESTIONS = [
@@ -92,7 +114,10 @@ const SUGGESTIONS = [
 const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'deepseek-v4-pro': 1000000,
   'deepseek-v4-flash': 1000000,
+  'deepseek-v4-flash-vision-exp': 1000000,
   'qwen3.7-flash': 1000000,
+  'z-image-turbo': 1000000,
+  'stealth/ox-alpha': 1000000,
   'gemini-2.5-flash': 1000000,
 }
 
@@ -115,6 +140,7 @@ function estimateMessageTokens(m: Msg): number {
   if (m.attachments) {
     for (const a of m.attachments) {
       if (a.kind === 'image') t += 85
+      else if (a.kind === 'video') t += 512
       else if (a.text) t += estimateTextTokens(a.text)
     }
   }
@@ -184,7 +210,10 @@ function friendlyError(res: Response, raw: string, membersUrl: string): { conten
   return { content: raw || `Something went wrong (error ${res.status}). Please try again.` }
 }
 
-type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } }
+type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } }
+  | { type: 'video_url'; video_url: { url: string } }
 
 function isTruncated(m: Msg): boolean {
   if (!m.content) return false
@@ -203,6 +232,7 @@ function isTruncated(m: Msg): boolean {
 
 const TEXT_FILE_EXT = /\.(txt|md|markdown|csv|json|log|py|ts|tsx|js|jsx|html|css|scss|yaml|yml|xml|sh|bash|sql|go|java|rb|php)$/i
 const MAX_TEXT_FILE_BYTES = 100 * 1024
+const MAX_VIDEO_BYTES = 50 * 1024 * 1024
 const IMAGE_MAX_DIM = 1280
 const IMAGE_QUALITY = 0.85
 
@@ -250,8 +280,13 @@ async function processFile(file: File): Promise<Attachment> {
     const dataUrl = await downscaleImage(file)
     return { id, name: file.name, kind: 'image', dataUrl, size: file.size }
   }
+  if (file.type.startsWith('video/')) {
+    if (file.size > MAX_VIDEO_BYTES) throw new Error(`${file.name} is too large (max 50MB).`)
+    const dataUrl = await readFileAsDataUrl(file)
+    return { id, name: file.name, kind: 'video', dataUrl, size: file.size }
+  }
   if (!TEXT_FILE_EXT.test(file.name)) {
-    throw new Error(`Unsupported file type: ${file.name}. Attach an image or a text file (txt/md/csv/json/log/code).`)
+    throw new Error(`Unsupported file type: ${file.name}. Attach an image, video or text file.`)
   }
   if (file.size > MAX_TEXT_FILE_BYTES) {
     throw new Error(`${file.name} is too large to attach as text (max 100KB).`)
@@ -267,6 +302,8 @@ function buildContent(text: string, attachments: Attachment[]): string | Content
   for (const a of attachments) {
     if (a.kind === 'image' && a.dataUrl) {
       parts.push({ type: 'image_url', image_url: { url: a.dataUrl } })
+    } else if (a.kind === 'video' && a.dataUrl) {
+      parts.push({ type: 'video_url', video_url: { url: a.dataUrl } })
     } else if (a.kind === 'text' && a.text != null) {
       parts.push({ type: 'text', text: `[Attached file: ${a.name}]\n\n${a.text}` })
     }
@@ -279,6 +316,8 @@ function AttachmentPreview({ attachment, onRemove }: { attachment: Attachment; o
     <div className="relative">
       {attachment.kind === 'image' && attachment.dataUrl ? (
         <img src={attachment.dataUrl} alt={attachment.name} className="h-16 w-16 rounded-lg border border-zinc-700 object-cover" />
+      ) : attachment.kind === 'video' && attachment.dataUrl ? (
+        <video src={attachment.dataUrl} className="h-16 w-16 rounded-lg border border-zinc-700 object-cover" muted />
       ) : (
         <span className="flex max-w-44 items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300">
           <FiFileText size={13} />
@@ -415,13 +454,16 @@ export default function Chat3() {
     })
       .then((r) => r.json())
       .then((d) => {
-        // The backend already narrows the list to the models this user may
-        // call (free tier = flash + stealth/ox-alpha), so show them all.
         const list = (d?.data || []).map((m: { id: string }) => m.id)
-        if (list.length) {
-          setModels(list)
+        let filtered = list.filter((id: string) => ALLOWED_CHAT_MODELS.has(id))
+        if (!filtered.includes('z-image-turbo') && ALLOWED_CHAT_MODELS.has('z-image-turbo')) {
+          filtered = [...filtered, 'z-image-turbo']
+        }
+        const toShow = filtered.filter((id: string) => ALLOWED_CHAT_MODELS.has(id))
+        if (toShow.length) {
+          setModels(toShow)
           setModel((cur) =>
-            cur && list.includes(cur) ? cur : list.find((id: string) => id.includes('flash')) || list[0]
+            cur && toShow.includes(cur) ? cur : toShow.find((id: string) => id.includes('flash')) || toShow[0]
           )
         }
       })
@@ -536,15 +578,17 @@ export default function Chat3() {
     setInput('')
     setPending([])
     const hasImage = attachments.some((a) => a.kind === 'image')
+    const hasVideo = attachments.some((a) => a.kind === 'video')
+    const hasMedia = hasImage || hasVideo
     const requestModel = freeTier
       ? model.includes('flash') || model === 'stealth/ox-alpha'
         ? model
         : 'deepseek-v4-flash'
       : model
-    const upstreamModel = hasImage ? 'gemini-2.5-flash' : requestModel
+    const upstreamModel = hasMedia ? 'gemini-2.5-flash' : requestModel
     setMessages((m) => [...m, { role: 'user', content: text, attachments, model: requestModel }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
     setBusy(true)
-    setIsVision(hasImage)
+    setIsVision(hasMedia)
 
     const history = imageGen
       ? []
@@ -562,7 +606,7 @@ export default function Chat3() {
         ? [{ role: 'user', content: text }]
         : [...history, { role: 'user', content: buildContent(text, attachments) }],
     }
-    if (!hasImage) {
+    if (!hasMedia) {
       if (thinking) {
         body['reasoning'] = { effort }
         body['output_config'] = { effort }
@@ -775,6 +819,7 @@ export default function Chat3() {
 
   return (
     <>
+      <style>{`@keyframes slide { 0%{transform:translateX(0)} 20%{transform:translateX(0)} 80%{transform:translateX(calc(-100% + 100px))} 100%{transform:translateX(calc(-100% + 100px))} }`}</style>
     <div className="flex flex-col flex-1 min-h-0">
       {/* Top bar */}
       <div className="flex items-center justify-between mb-2 px-1 shrink-0">
@@ -785,17 +830,18 @@ export default function Chat3() {
         >
           <FiPlus size={20} />
         </button>
-        <div ref={modelRef} className="relative">
-          <button
-            onClick={() => setModelOpen((o) => !o)}
-            className="flex h-9 items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors"
-          >
-            <span className="size-2 rounded-full bg-(--primary-color)" />
-            <span className="truncate font-medium">{MODEL_META[model]?.name ?? model}</span>
-            <FiChevronDown size={14} className={`transition-transform ${modelOpen ? 'rotate-180' : ''}`} />
-          </button>
-          {modelOpen && (
-            <div className="absolute right-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 py-1.5 shadow-xl">
+        <div className="flex items-center gap-2">
+          <div ref={modelRef} className="relative">
+            <button
+              onClick={() => setModelOpen((o) => !o)}
+              className="flex h-9 items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors"
+            >
+              <span className="size-2 rounded-full bg-(--primary-color)" />
+              <span className="truncate font-medium">{MODEL_META[model]?.name ?? model}</span>
+              <FiChevronDown size={14} className={`transition-transform ${modelOpen ? 'rotate-180' : ''}`} />
+            </button>
+            {modelOpen && (
+            <div className="absolute left-1/2 -translate-x-1/2 sm:left-auto sm:right-0 sm:translate-x-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 py-1.5 shadow-xl">
               <div className="max-h-100 overflow-y-auto">
               {models.map((m) => {
                 const meta = MODEL_META[m]
@@ -806,20 +852,22 @@ export default function Chat3() {
                       setModel(m)
                       setModelOpen(false)
                     }}
-                    className={`flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors hover:bg-zinc-800 ${
+                    className={`group flex w-full items-start gap-3 px-4 py-2.5 text-left transition-colors hover:bg-zinc-800 ${
                       m === model ? 'text-zinc-100' : 'text-zinc-400'
                     }`}
                   >
                     <span className="mt-1.5 size-2 shrink-0 rounded-full bg-(--primary-color)" />
-                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="flex items-center gap-1.5">
-                        <span className="truncate text-sm font-medium">
+                    <span className="flex min-w-0 flex-1 flex-col gap-1">
+                      <span className="overflow-hidden">
+                        <span className="block truncate text-sm font-medium whitespace-nowrap group-hover:animate-[slide_2.5s_linear_infinite]">
                           {meta?.name ?? m}
                         </span>
+                      </span>
+                      <span className="flex flex-wrap gap-1">
                         {meta?.badges.map((b) => (
                           <span
                             key={b}
-                            className={`rounded-full border px-1.5 py-px text-[10px]  uppercase tracking-wide ${
+                            className={`rounded-full px-1.5 py-px text-[9px] uppercase tracking-wide ${
                               BADGE_STYLES[b] ?? BADGE_STYLES.default
                             }`}
                           >
@@ -837,6 +885,21 @@ export default function Chat3() {
               </div>
             </div>
           )}
+          </div>
+          <button
+            onClick={() => setUpgradeOpen(true)}
+            className="hidden sm:inline-flex h-7 items-center gap-1.5 rounded-full bg-(--primary-color) px-3 text-xs font-medium text-(--primary-foreground) transition-opacity hover:opacity-90"
+          >
+            <FiZap size={12} />
+            Upgrade
+          </button>
+          <button
+            onClick={() => setUpgradeOpen(true)}
+            className="sm:hidden flex h-7 w-7 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground)"
+            title="Upgrade"
+          >
+            <FiZap size={14} />
+          </button>
         </div>
         <div className="w-10" />
       </div>
@@ -1086,7 +1149,7 @@ export default function Chat3() {
               ref={fileInputRef}
               type="file"
               multiple
-              accept="image/*,.txt,.md,.csv,.json,.log,.py,.ts,.tsx,.js,.jsx,.html,.css,.yaml,.yml,.xml,.sh,.sql,.go,.java,.rb,.php"
+              accept="image/*,video/*,.txt,.md,.csv,.json,.log,.py,.ts,.tsx,.js,.jsx,.html,.css,.yaml,.yml,.xml,.sh,.sql,.go,.java,.rb,.php"
               className="hidden"
               onChange={onPickFiles}
             />

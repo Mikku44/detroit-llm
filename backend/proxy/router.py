@@ -43,7 +43,20 @@ def _has_image_content(body: dict) -> bool:
     return False
 
 
+def _has_video_content(body: dict) -> bool:
+    for msg in body.get("messages", []):
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and (
+                    part.get("type") == "video_url" or "video_url" in part
+                ):
+                    return True
+    return False
+
+
 RESPONSES_IMAGE_PART_TYPES = ("input_image", "image_url")
+RESPONSES_VIDEO_PART_TYPES = ("input_video", "video_url")
 
 
 def _responses_has_image(input_data) -> bool:
@@ -55,6 +68,18 @@ def _responses_has_image(input_data) -> bool:
         if isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get("type") in RESPONSES_IMAGE_PART_TYPES:
+                    return True
+    return False
+
+
+def _responses_has_video(input_data) -> bool:
+    for item in input_data or []:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") in RESPONSES_VIDEO_PART_TYPES:
                     return True
     return False
 
@@ -735,6 +760,16 @@ def _anthropic_has_image(body: dict) -> bool:
         if isinstance(content, list):
             for part in content:
                 if isinstance(part, dict) and part.get("type") == "image":
+                    return True
+    return False
+
+
+def _anthropic_has_video(body: dict) -> bool:
+    for msg in body.get("messages") or []:
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "video":
                     return True
     return False
 
@@ -2049,10 +2084,17 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
     body.pop("image_gen", None)
     body.pop("web_search", None)
 
-    # If the request contains images, route to Gemini (DeepSeek has no vision).
-    if _has_image_content(body):
-        # deepseek-v4-flash-vision-exp is a DeepSeek vision model — send it upstream.
+    # Media routing: qwen3.7-flash & stealth/ox-alpha support [text,image,video],
+    # deepseek-v4-flash-vision-exp supports [text,image] only.
+    has_image = _has_image_content(body)
+    has_video = _has_video_content(body)
+    if has_image or has_video:
         if model == "deepseek-v4-flash-vision-exp":
+            if has_video:
+                raise HTTPException(
+                    status_code=400,
+                    detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or stealth/ox-alpha for video.",
+                )
             if not settings.deepseek_api_key:
                 raise HTTPException(
                     status_code=503,
@@ -2060,9 +2102,6 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
                 )
             resp = await _proxy_to_deepseek(db, user_id, model, body, is_stream, fallback_prompt_tokens)
             return _with_log(resp, user_id, model, body.get("messages", []))
-        # Qwen (DashScope) and OpenRouter models have their own vision support —
-        # do NOT switch them to Gemini. They are proxied to their own upstreams
-        # below, where image content is passed through unchanged.
         if model.lower().startswith("qwen") or model.lower() == "stealth/ox-alpha":
             pass
         else:
@@ -2071,7 +2110,7 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
                     status_code=503,
                     detail=(
                         "Vision is not configured on this gateway. "
-                        "Set GEMINI_API_KEY in the server environment to enable image chat."
+                        "Set GEMINI_API_KEY in the server environment to enable image/video chat."
                     ),
                 )
             resp = await _proxy_to_gemini(db, user_id, body, is_stream, fallback_prompt_tokens)
@@ -2357,16 +2396,21 @@ async def responses_api(
     is_stream = body.get("stream", False)
     fallback_prompt_tokens = count_responses_input_tokens(body.get("input") or "")
 
-    # If the request contains images, route to Gemini (DeepSeek has no vision),
-    # unless the caller explicitly chose the DeepSeek vision model.
-    if _responses_has_image(body.get("input")):
-        if model != "deepseek-v4-flash-vision-exp":
+    has_image = _responses_has_image(body.get("input"))
+    has_video = _responses_has_video(body.get("input"))
+    if has_image or has_video:
+        if model == "deepseek-v4-flash-vision-exp":
+            if has_video:
+                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or stealth/ox-alpha for video.")
+        elif model.lower().startswith("qwen") or model.lower() == "stealth/ox-alpha":
+            pass
+        else:
             if not settings.gemini_api_key:
                 raise HTTPException(
                     status_code=503,
                     detail=(
                         "Vision is not configured on this gateway. "
-                        "Set GEMINI_API_KEY in the server environment to enable image chat."
+                        "Set GEMINI_API_KEY in the server environment to enable image/video chat."
                     ),
                 )
             return await _proxy_gemini_responses(db, user_id, body, is_stream, fallback_prompt_tokens)
@@ -2515,24 +2559,29 @@ async def anthropic_messages(
     payload = _anthropic_chat_payload(body)
     fallback_prompt_tokens = fallback_prompt_tokens_for(payload.get("messages") or [])
     has_image = _anthropic_has_image(body)
-
-    if has_image:
-        # Gemini is the only upstream with vision; DeepSeek has none.
-        if not settings.gemini_api_key:
-            raise HTTPException(
-                status_code=503,
-                detail=(
-                    "Vision is not configured on this gateway. "
-                    "Set GEMINI_API_KEY in the server environment to enable image chat."
-                ),
-            )
-        payload["model"] = settings.gemini_model
-        url = f"{settings.gemini_url}/openai/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {settings.gemini_api_key}",
-        }
-        upstream_model = settings.gemini_model
+    has_video = _anthropic_has_video(body)
+    if has_image or has_video:
+        if model == "deepseek-v4-flash-vision-exp":
+            if has_video:
+                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or stealth/ox-alpha for video.")
+        elif model.lower().startswith("qwen") or model.lower() == "stealth/ox-alpha":
+            pass
+        else:
+            if not settings.gemini_api_key:
+                raise HTTPException(
+                    status_code=503,
+                    detail=(
+                        "Vision is not configured on this gateway. "
+                        "Set GEMINI_API_KEY in the server environment to enable image/video chat."
+                    ),
+                )
+            payload["model"] = settings.gemini_model
+            url = f"{settings.gemini_url}/openai/chat/completions"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {settings.gemini_api_key}",
+            }
+            upstream_model = settings.gemini_model
     elif settings.deepseek_api_key:
         url = f"{settings.deepseek_url}/chat/completions"
         headers = _deepseek_headers()
@@ -3415,6 +3464,12 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             "type": "model",
             "id": "stealth/ox-alpha",
             "display_name": "stealth/ox-alpha (OpenRouter)",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "z-image-turbo",
+            "display_name": "z-image-turbo (DashScope)",
         },
         {
             "object": "model",
