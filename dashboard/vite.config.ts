@@ -10,7 +10,8 @@ import http from 'node:http'
 const freshAgent = new http.Agent({ keepAlive: false, maxSockets: 64 })
 
 export default defineConfig({
-  esbuild: { drop: process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [] },
+  // @ts-ignore - esbuild drop is valid at runtime, type missing in vite 8 ESBuildOptions
+  esbuild: { drop: process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [] } as never,
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

@@ -408,7 +408,7 @@ export default function Chat3() {
   const [hasMore, setHasMore] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [oldestPos, setOldestPos] = useState<number | null>(null)
-  const { conversations, activeId, setActiveId, save: saveConversation, getMessagesPage, appendMessages } = useChatHistory()
+  const { activeId, setActiveId, save: saveConversation, getMessagesPage, appendMessages } = useChatHistory()
   const convSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const modelRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
