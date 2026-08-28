@@ -6,18 +6,21 @@ import (
 )
 
 type Config struct {
-	Port              string
-	BackendURL        string
-	SGLangURL         string
-	DashboardURL      string
+	Port               string
+	BackendURL         string
+	SGLangURL          string
+	DashboardURL       string
 	RateLimitPerMinute int
-	DatabaseURL       string
+	DatabaseURL        string
 	ConversationsDBURL string
-	JWTSecret         string
-	DeepseekURL       string
-	DeepseekKey       string
-	ZAIURL            string
-	ZAIKey            string
+	JWTSecret          string
+	DeepseekURL        string
+	DeepseekKey        string
+	ZAIURL             string
+	ZAIKey             string
+	DashScopeURL       string
+	DashScopeKey       string
+	ImageProvider      string
 }
 
 func Load() Config {
@@ -35,6 +38,9 @@ func Load() Config {
 		DeepseekKey:       envOr("DEEPSEEK_API_KEY", ""),
 		ZAIURL:            envOr("Z_AI_URL", "https://api.z.ai/api/paas/v4"),
 		ZAIKey:            envOr("Z_API_KEY", ""),
+		DashScopeURL:      envOr("DASHSCOPE_URL", "https://dashscope-intl.aliyuncs.com"),
+		DashScopeKey:      envOr("DASHSCOPE_API_KEY", ""),
+		ImageProvider:     envOr("IMAGE_PROVIDER", "auto"),
 	}
 }
 

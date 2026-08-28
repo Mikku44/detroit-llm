@@ -32,9 +32,16 @@ type cachedUsage struct {
 	ts      time.Time
 }
 
+var imageOnlyModels = map[string]bool{
+	"z-image-turbo": true, "gpt-image-1": true, "dall-e-3": true, "gemini-2.0-flash-preview-image-generation": true,
+}
+
+func isImageModel(model string) bool {
+	return imageOnlyModels[strings.ToLower(model)]
+}
+
 func HandleChatCompletions(cfg config.Config, pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Only handle deepseek / glm direct; fallback to Python for others
 		body, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		var req struct {
@@ -43,9 +50,14 @@ func HandleChatCompletions(cfg config.Config, pool *pgxpool.Pool) http.HandlerFu
 		}
 		_ = json.Unmarshal(body, &req)
 		model := strings.ToLower(req.Model)
+		if isImageModel(model) {
+			body = ensureImageGen(body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+			forwardToBackend(w, r, cfg.BackendURL)
+			return
+		}
 		isDirect := strings.Contains(model, "deepseek") || strings.HasPrefix(model, "glm-") || model == "" || strings.HasPrefix(model, "claude")
 		if !isDirect {
-			// qwen, gemini, image etc -> fallback
 			forwardToBackend(w, r, cfg.BackendURL)
 			return
 		}
@@ -230,6 +242,36 @@ func logUsage(pool *pgxpool.Pool, userID, model string, reqBody []byte, resp *ht
 	delete(usageCache.m, userID)
 	usageCache.Unlock()
 	_, _ = pool.Exec(ctx, `INSERT INTO usage_logs (id, api_key_id, model, prompt_tokens, completion_tokens, total_tokens, created_at) VALUES (gen_random_uuid(), $1, $2, 0, 0, 0, NOW())`, akID, model)
+}
+
+func ensureImageGen(body []byte) []byte {
+	var m map[string]interface{}
+	if err := json.Unmarshal(body, &m); err != nil {
+		return body
+	}
+	if _, ok := m["image_gen"]; !ok {
+		m["image_gen"] = true
+		if nb, err := json.Marshal(m); err == nil {
+			return nb
+		}
+	}
+	return body
+}
+
+func HandleWebChatCompletions(cfg config.Config) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(body, &req)
+		if isImageModel(req.Model) {
+			body = ensureImageGen(body)
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		forwardToBackend(w, r, cfg.BackendURL)
+	}
 }
 
 func forwardToBackend(w http.ResponseWriter, r *http.Request, backendURL string) {

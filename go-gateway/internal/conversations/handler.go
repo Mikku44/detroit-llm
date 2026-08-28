@@ -321,6 +321,7 @@ func DeleteHandler(cfg config.Config, pool *pgxpool.Pool, convPool *pgxpool.Pool
 			fallback(w, r, cfg)
 			return
 		}
+		_, _ = convPool.Exec(ctx, `DELETE FROM conversation_messages WHERE conversation_id=$1`, cid)
 		ct, err := convPool.Exec(ctx, `DELETE FROM conversations WHERE id=$1 AND user_id=$2`, cid, uid)
 		if err != nil {
 			fallback(w, r, cfg)

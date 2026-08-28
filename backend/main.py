@@ -58,7 +58,19 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Gateway", "X-Handler", "X-Served-By", "X-Response-Time", "X-Gateway-Version"],
 )
+
+
+@app.middleware("http")
+async def gateway_header_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    response.headers["X-Gateway"] = "fastapi"
+    response.headers["X-Gateway-Version"] = "0.1.0"
+    response.headers["X-Handler"] = f"fastapi:{request.url.path}"
+    response.headers["X-Response-Time"] = f"{(time.perf_counter() - start) * 1000:.1f}ms"
+    return response
 
 
 @app.middleware("http")
@@ -76,7 +88,7 @@ async def rate_limit_middleware(request: Request, call_next):
             return JSONResponse(
                 content={"detail": "Rate limit exceeded. Try again later."},
                 status_code=429,
-                headers={"Retry-After": str(retry_after)},
+                headers={"Retry-After": str(retry_after), "X-Gateway": "fastapi", "X-Handler": "rate-limit"},
             )
     response = await call_next(request)
     return response
@@ -100,7 +112,7 @@ async def health():
         sglang_ok = r.status_code == 200
     except Exception:
         pass
-    return {"status": "ok", "sglang": sglang_ok, "members_url": settings.members_url}
+    return {"status": "ok", "sglang": sglang_ok, "members_url": settings.members_url, "gateway": "fastapi"}
 
 
 @app.get("/")
@@ -108,6 +120,7 @@ async def root():
     return {
         "name": "Detroit LLM Gateway",
         "version": "0.1.0",
+        "gateway": "fastapi",
         "endpoints": {
             "chat": "POST /v1/chat/completions",
             "models": "GET /v1/models",

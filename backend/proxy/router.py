@@ -528,6 +528,9 @@ async def _free_model_gate(db: AsyncSession, user_id: str, body: dict, default_m
 
     if _is_free_tier_model(model):
         return model
+    # Image-only models are allowed for free tier (quota enforced separately)
+    if model.lower() in {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation"}:
+        return model
     if not await _is_free_user(db, user_id):
         return model
     if not body.get("model"):
@@ -2201,8 +2204,12 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
             resp = await _proxy_to_gemini(db, user_id, body, is_stream, fallback_prompt_tokens)
             return _with_log(resp, user_id, model, body.get("messages", []))
 
-    # If the user explicitly toggled image gen, or (in context) asks to create an
-    # image, let DeepSeek tool-call our image tool.
+    # If the user explicitly toggled image gen, selected an image-only model
+    # (z-image-turbo etc.), or (in context) asks to create an image,
+    # let DeepSeek tool-call our image tool.
+    _IMAGE_ONLY_MODELS = {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation"}
+    if model and model.lower() in _IMAGE_ONLY_MODELS:
+        image_gen = True
     if image_gen or await _detect_image_intent(body.get("messages") or []):
         print(f"  [image-intent] -> tool loop (prompt: {_last_user_text(body.get('messages') or [])[:100]!r})")
         resp = await _proxy_image_tool_loop(db, user_id, model, body, is_stream, fallback_prompt_tokens)

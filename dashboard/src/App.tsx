@@ -11,6 +11,7 @@ import Layout from './components/Layout'
 import Chat3 from './pages/Chat3'
 import Docs from './pages/Docs'
 import AdminSystem from './pages/AdminSystem'
+import Console from './pages/Console'
 import NotFound from './pages/NotFound'
 import CookieConsent from './components/CookieConsent'
 
@@ -37,6 +38,7 @@ export default function App() {
           <Route path="chat/:id?" element={<Chat3 />} />
           <Route path="docs" element={<Docs />} />
           <Route path="admin" element={<AdminSystem />} />
+          <Route path="console" element={<Console />} />
           <Route path="*" element={<NotFound />} />
         </Route>
         <Route path="*" element={<NotFound />} />

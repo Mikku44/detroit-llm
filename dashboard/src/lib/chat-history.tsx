@@ -26,7 +26,7 @@ type ChatHistoryContextType = {
   activeId: string | null
   setActiveId: (id: string | null) => void
   save: (convId: string | null, msgs: Message[], model?: string) => Promise<string | null>
-  remove: (convId: string) => void
+  remove: (convId: string) => Promise<void>
   getMessages: (convId: string, opts?: { limit?: number; before?: number }) => Promise<Message[]>
   getMessagesPage: (convId: string, opts?: { limit?: number; before?: number }) => Promise<{ messages: Message[]; hasMore: boolean; oldestPosition: number | null; total: number }>
   appendMessages: (convId: string, msgs: Message[]) => Promise<void>
@@ -96,15 +96,22 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
   )
 
   const remove = useCallback(
-    (convId: string) => {
-      api
-        .deleteConversation(convId)
-        .catch(() => {})
-        .finally(() => refresh())
+    async (convId: string) => {
+      const snapshot = conversations
+      const wasActive = activeId === convId
       setConversations((prev) => prev.filter((c) => c.id !== convId))
-      setActiveId((cur) => (cur === convId ? null : cur))
+      if (wasActive) setActiveId(null)
+      try {
+        await api.deleteConversation(convId)
+      } catch (e) {
+        setConversations(snapshot)
+        if (wasActive) setActiveId(convId)
+        throw e
+      } finally {
+        await refresh()
+      }
     },
-    [refresh],
+    [conversations, activeId, refresh],
   )
 
   const getMessages = useCallback(async (convId: string, opts: { limit?: number; before?: number } = {}): Promise<Message[]> => {

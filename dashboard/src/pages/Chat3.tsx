@@ -673,7 +673,10 @@ export default function Chat3() {
     setBusy(true)
     setIsVision(hasMedia)
 
-    const history = imageGen
+    const IMAGE_ONLY_MODELS = new Set(['z-image-turbo', 'gpt-image-1', 'dall-e-3', 'gemini-2.0-flash-preview-image-generation'])
+    const isImageModel = IMAGE_ONLY_MODELS.has(requestModel)
+    const doImageGen = imageGen || isImageModel
+    const history = doImageGen
       ? []
       : messages
           .filter((m) => m.role === 'user' || m.role === 'assistant')
@@ -685,7 +688,7 @@ export default function Chat3() {
       model: requestModel,
       max_tokens: 1024,
       stream: true,
-      messages: imageGen
+      messages: doImageGen
         ? [{ role: 'user', content: text }]
         : [...history, { role: 'user', content: buildContent(text, attachments) }],
     }
@@ -697,7 +700,7 @@ export default function Chat3() {
         body['reasoning'] = { effort: 'none' }
       }
     }
-    if (imageGen) body['image_gen'] = true
+    if (doImageGen) body['image_gen'] = true
     if (webSearch) body['web_search'] = true
 
     const controller = new AbortController()

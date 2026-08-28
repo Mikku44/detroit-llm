@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { useIsMobile } from '../hooks/use-mobile'
 import { LogOut, Key, BarChart3, LayoutDashboard, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard, Cookie, Users, CreditCard } from 'lucide-react'
-import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat, HiOutlineShieldCheck } from 'react-icons/hi'
+import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat, HiOutlineShieldCheck, HiOutlineTerminal } from 'react-icons/hi'
 import { ChatHistoryProvider, useChatHistory } from '../lib/chat-history'
 import Avatar from './Avatar'
 import UpgradeDialog from './UpgradeDialog'
@@ -19,6 +19,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../components/ui/alert-dialog'
+import IOSLoading from './ios-loading'
 import {
   SidebarProvider,
   Sidebar,
@@ -50,6 +61,7 @@ const links = [
   { to: '/keys', label: 'API Keys', icon: HiOutlineKey },
   { to: '/usage', label: 'Usage', icon: HiOutlineChartBar },
   { to: '/docs', label: 'Docs', icon: HiOutlineBookOpen },
+  { to: '/console', label: 'Console', icon: HiOutlineTerminal },
 ]
 
 const adminLinks = [
@@ -98,6 +110,9 @@ function SidebarInner() {
   const [membersOpen, setMembersOpen] = useState(false)
   const [paymentsOpen, setPaymentsOpen] = useState(false)
   const { conversations, activeId, setActiveId, remove, refresh } = useChatHistory()
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     refresh()
@@ -115,11 +130,25 @@ function SidebarInner() {
 
   const deleteConv = (e: React.MouseEvent, convId: string) => {
     e.stopPropagation()
-    const wasActive = activeId === convId
-    remove(convId)
-    if (wasActive) {
-      setActiveId(null)
-      navigate('/chat')
+    const conv = conversations.find((c) => c.id === convId)
+    setDeleteTarget({ id: convId, title: conv?.title || 'this conversation' })
+    setDeleteError(null)
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || deleting) return
+    const wasActive = activeId === deleteTarget.id
+    const targetId = deleteTarget.id
+    setDeleting(true)
+    setDeleteError(null)
+    try {
+      await remove(targetId)
+      setDeleteTarget(null)
+      if (wasActive) navigate('/chat')
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete. Please try again.')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -339,7 +368,45 @@ function SidebarInner() {
       />,
       <UpgradeDialog key="upgrade-dialog" open={upgradeOpen} onOpenChange={setUpgradeOpen} />,
       <MembersManagerDialog key="members-dialog" open={membersOpen} onOpenChange={setMembersOpen} />,
-      <PaymentsHistoryDialog key="payments-dialog" open={paymentsOpen} onOpenChange={setPaymentsOpen} />
+      <PaymentsHistoryDialog key="payments-dialog" open={paymentsOpen} onOpenChange={setPaymentsOpen} />,
+      <AlertDialog key="delete-dialog" open={!!deleteTarget} onOpenChange={(o) => !o && !deleting && setDeleteTarget(null)}>
+        <AlertDialogContent className="sm:max-w-md bg-zinc-800/50 border-zinc-700 backdrop-blur-md">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-zinc-100">Delete conversation?</AlertDialogTitle>
+            <AlertDialogDescription className="text-zinc-400">
+              This will permanently delete <span className="font-medium text-zinc-200">"{deleteTarget?.title}"</span> and all its messages. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {deleteError && <p className="text-sm text-red-400 bg-red-950/30 border border-red-900/50 rounded-lg px-3 py-2">{deleteError}</p>}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting} className="bg-zinc-800/50 border-zinc-700 text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100">Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleting}
+              onClick={(e) => {
+                e.preventDefault()
+                confirmDelete()
+              }}
+              className="bg-red-600 text-white hover:bg-red-700 focus:ring-red-600 disabled:opacity-50"
+            >
+              {deleting ? (
+                <span className="inline-flex items-center gap-2">
+                  <span className="size-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  Deleting...
+                </span>
+              ) : (
+                'Delete'
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>,
+      deleting && (
+        <div key="delete-loading" className="fixed inset-0 z-[100] bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center gap-4">
+          <IOSLoading size={48} />
+          <p className="text-sm font-medium text-zinc-200">Deleting conversation...</p>
+          <p className="text-xs text-zinc-500">Please wait</p>
+        </div>
+      ),
   ]
 }
 

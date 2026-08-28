@@ -59,19 +59,23 @@ func main() {
 	r := chi.NewRouter()
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RealIP)
+	r.Use(gatewayHeader)
 	r.Use(cors(cfg.DashboardURL))
 
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
+		setHandlerHeader(w, "health")
 		sglangOK := false
 		client := &http.Client{Timeout: 3 * time.Second}
 		if resp, err := client.Get(sglangURL + "/health"); err == nil {
 			sglangOK = resp.StatusCode == 200
 			resp.Body.Close()
 		}
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "sglang": sglangOK})
+		w.Header().Set("X-Served-By", "go-edge/health")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "sglang": sglangOK, "gateway": "go-edge"})
 	})
 
 	r.Get("/", func(w http.ResponseWriter, req *http.Request) {
+		setHandlerHeader(w, "root")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"name": "Detroit LLM Gateway (Go Edge)",
 			"version": "0.1.0-go",
@@ -87,39 +91,62 @@ func main() {
 	// Rate-limited edge for /v1/*
 	r.Group(func(gr chi.Router) {
 		gr.Use(rateLimitMiddleware(limiter))
-		gr.Get("/v1/models", modelsHandler(backendURL))
+		gr.Get("/v1/models", func(w http.ResponseWriter, r *http.Request) {
+			setHandlerHeader(w, "models-cache")
+			modelsHandler(backendURL).ServeHTTP(w, r)
+		})
 		if pool != nil {
-			gr.Post("/v1/chat/completions", chat.HandleChatCompletions(cfg, pool))
+			gr.Post("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+				setHandlerHeader(w, "chat-go")
+				chat.HandleChatCompletions(cfg, pool).ServeHTTP(w, r)
+			})
 		} else {
-			gr.HandleFunc("/v1/chat/completions", chatProxyHandler(backendURL))
+			gr.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+				setHandlerHeader(w, "chat-proxy")
+				chatProxyHandler(backendURL).ServeHTTP(w, r)
+			})
 		}
-		gr.HandleFunc("/v1/responses", genericProxy(backendURL))
-		gr.HandleFunc("/v1/messages", genericProxy(backendURL))
-		gr.HandleFunc("/v1/*", genericProxy(backendURL))
+		gr.HandleFunc("/v1/responses", func(w http.ResponseWriter, r *http.Request) {
+			setHandlerHeader(w, "proxy-fallback")
+			genericProxy(backendURL).ServeHTTP(w, r)
+		})
+		gr.HandleFunc("/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+			setHandlerHeader(w, "proxy-fallback")
+			genericProxy(backendURL).ServeHTTP(w, r)
+		})
+		gr.HandleFunc("/v1/*", func(w http.ResponseWriter, r *http.Request) {
+			setHandlerHeader(w, "proxy-fallback")
+			genericProxy(backendURL).ServeHTTP(w, r)
+		})
 	})
 
 	// Admin read path migrated to Go (with fallback)
 	if pool != nil {
-		r.Get("/admin/status", admin.StatusHandler(cfg, pool))
-		r.Get("/admin/balances", admin.BalancesHandler(cfg, pool))
-		r.Get("/admin/usage", admin.UsageHandler(cfg, pool))
-		r.Get("/admin/usage/*", admin.UsageHandler(cfg, pool))
+		r.Get("/admin/status", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-go"); admin.StatusHandler(cfg, pool).ServeHTTP(w, r) })
+		r.Get("/admin/balances", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-fallback"); admin.BalancesHandler(cfg, pool).ServeHTTP(w, r) })
+		r.Get("/admin/usage", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-fallback"); admin.UsageHandler(cfg, pool).ServeHTTP(w, r) })
+		r.Get("/admin/usage/*", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-fallback"); admin.UsageHandler(cfg, pool).ServeHTTP(w, r) })
 	}
 	// Conversations migrated to Go (pg-only, fallback on decrypt fail or sqlite)
 	if convPool != nil {
-		r.Get("/api/conversations", convpkg.ListHandler(cfg, pool, convPool))
-		r.Get("/api/conversations/{conversation_id}", convpkg.GetHandler(cfg, pool, convPool))
-		r.Get("/api/conversations/{conversation_id}/messages", convpkg.GetHandler(cfg, pool, convPool))
-		r.Delete("/api/conversations/{conversation_id}", convpkg.DeleteHandler(cfg, pool, convPool))
-		r.Delete("/api/conversations/{id}", convpkg.DeleteHandler(cfg, pool, convPool))
+		r.Get("/api/conversations", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.ListHandler(cfg, pool, convPool).ServeHTTP(w, r) })
+		r.Get("/api/conversations/{conversation_id}", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.GetHandler(cfg, pool, convPool).ServeHTTP(w, r) })
+		r.Get("/api/conversations/{conversation_id}/messages", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.GetHandler(cfg, pool, convPool).ServeHTTP(w, r) })
+		r.Delete("/api/conversations/{conversation_id}", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.DeleteHandler(cfg, pool, convPool).ServeHTTP(w, r) })
+		r.Delete("/api/conversations/{id}", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.DeleteHandler(cfg, pool, convPool).ServeHTTP(w, r) })
 	}
 	// Ensure mutating conversation routes always reach Python when Go has no handler
-	r.Post("/api/conversations", func(w http.ResponseWriter, req *http.Request) { forwardToBackend(w, req, backendURL) })
-	r.Post("/api/conversations/{conversation_id}/messages", func(w http.ResponseWriter, req *http.Request) { forwardToBackend(w, req, backendURL) })
-	r.Put("/api/conversations/{conversation_id}", func(w http.ResponseWriter, req *http.Request) { forwardToBackend(w, req, backendURL) })
+	r.Post("/api/conversations", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
+	r.Post("/api/conversations/{conversation_id}/messages", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
+	r.Put("/api/conversations/{conversation_id}", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
+
+	// Web chat — inject image_gen for z-image-turbo so /chat creates images even without toggle
+	r.HandleFunc("/api/web/chat/completions", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "web-chat-go"); chat.HandleWebChatCompletions(cfg).ServeHTTP(w, r) })
+	r.HandleFunc("/api/web/chat/*", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "web-chat-go"); chat.HandleWebChatCompletions(cfg).ServeHTTP(w, r) })
 
 	// Fallback everything else to Python backend
 	r.HandleFunc("/*", func(w http.ResponseWriter, req *http.Request) {
+		setHandlerHeader(w, "proxy-fallback")
 		forwardToBackend(w, req, backendURL)
 	})
 
@@ -127,6 +154,19 @@ func main() {
 	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func gatewayHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Gateway", "go-edge")
+		w.Header().Set("X-Gateway-Version", "0.1.0-go")
+		w.Header().Set("X-Via", "go-edge")
+		next.ServeHTTP(w, r)
+	})
+}
+
+func setHandlerHeader(w http.ResponseWriter, v string) {
+	w.Header().Set("X-Handler", v)
 }
 
 func cors(dashboardURL string) func(http.Handler) http.Handler {
@@ -141,6 +181,7 @@ func cors(dashboardURL string) func(http.Handler) http.Handler {
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Access-Control-Allow-Methods", "*")
 			w.Header().Set("Access-Control-Allow-Headers", "*")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Gateway, X-Handler, X-Served-By, X-Response-Time, X-Gateway-Version")
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(204)
 				return
