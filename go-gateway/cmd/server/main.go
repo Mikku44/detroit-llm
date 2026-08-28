@@ -105,12 +105,18 @@ func main() {
 		r.Get("/admin/usage", admin.UsageHandler(cfg, pool))
 		r.Get("/admin/usage/*", admin.UsageHandler(cfg, pool))
 	}
-	// Conversations read migrated to Go (pg-only, fallback on decrypt fail or sqlite)
+	// Conversations migrated to Go (pg-only, fallback on decrypt fail or sqlite)
 	if convPool != nil {
 		r.Get("/api/conversations", convpkg.ListHandler(cfg, pool, convPool))
 		r.Get("/api/conversations/{conversation_id}", convpkg.GetHandler(cfg, pool, convPool))
 		r.Get("/api/conversations/{conversation_id}/messages", convpkg.GetHandler(cfg, pool, convPool))
+		r.Delete("/api/conversations/{conversation_id}", convpkg.DeleteHandler(cfg, pool, convPool))
+		r.Delete("/api/conversations/{id}", convpkg.DeleteHandler(cfg, pool, convPool))
 	}
+	// Ensure mutating conversation routes always reach Python when Go has no handler
+	r.Post("/api/conversations", func(w http.ResponseWriter, req *http.Request) { forwardToBackend(w, req, backendURL) })
+	r.Post("/api/conversations/{conversation_id}/messages", func(w http.ResponseWriter, req *http.Request) { forwardToBackend(w, req, backendURL) })
+	r.Put("/api/conversations/{conversation_id}", func(w http.ResponseWriter, req *http.Request) { forwardToBackend(w, req, backendURL) })
 
 	// Fallback everything else to Python backend
 	r.HandleFunc("/*", func(w http.ResponseWriter, req *http.Request) {

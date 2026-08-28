@@ -295,6 +295,46 @@ func GetHandler(cfg config.Config, pool *pgxpool.Pool, convPool *pgxpool.Pool) h
 	}
 }
 
+func DeleteHandler(cfg config.Config, pool *pgxpool.Pool, convPool *pgxpool.Pool) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		uid, err := auth.RequireSession(r.Header.Get("Authorization"), cfg.JWTSecret)
+		if err != nil || convPool == nil {
+			fallback(w, r, cfg)
+			return
+		}
+		if isSQLite(cfg.ConversationsDBURL) {
+			fallback(w, r, cfg)
+			return
+		}
+		cid := chi.URLParam(r, "conversation_id")
+		if cid == "" {
+			cid = chi.URLParam(r, "id")
+		}
+		if cid == "" {
+			http.Error(w, `{"detail":"missing id"}`, 400)
+			return
+		}
+		ctx := r.Context()
+		var owner string
+		err = convPool.QueryRow(ctx, `SELECT user_id FROM conversations WHERE id=$1`, cid).Scan(&owner)
+		if err != nil || owner != uid {
+			fallback(w, r, cfg)
+			return
+		}
+		ct, err := convPool.Exec(ctx, `DELETE FROM conversations WHERE id=$1 AND user_id=$2`, cid, uid)
+		if err != nil {
+			fallback(w, r, cfg)
+			return
+		}
+		if ct.RowsAffected() == 0 {
+			http.Error(w, `{"detail":"Conversation not found"}`, 404)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+	}
+}
+
 func isBase64Empty(s string) bool {
 	return s == ""
 }

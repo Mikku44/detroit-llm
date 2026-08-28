@@ -352,12 +352,22 @@ async def delete_conversation(
     user_id: str = Depends(require_session),
     db: AsyncSession = Depends(get_conversation_db),
 ):
-    result = await db.execute(
-        delete(Conversation).where(
-            Conversation.id == conversation_id, Conversation.user_id == user_id
+    try:
+        result = await db.execute(
+            delete(Conversation).where(
+                Conversation.id == conversation_id, Conversation.user_id == user_id
+            )
         )
-    )
-    if result.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-    await db.commit()
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+        await db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            await db.rollback()
+        except Exception:
+            pass
+        print(f"[conversations] delete failed {conversation_id} user={user_id}: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete conversation")
     return JSONResponse(content={"ok": True}, status_code=200)
