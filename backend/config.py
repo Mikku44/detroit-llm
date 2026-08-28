@@ -28,6 +28,9 @@ class Settings(BaseSettings):
         default="", validation_alias=AliasChoices("OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY")
     )
 
+    z_api_key: str = Field(default="", validation_alias=AliasChoices("Z_API_KEY", "ZAI_API_KEY"))
+    z_ai_url: str = "https://api.z.ai/api/paas/v4"
+
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     gemini_url: str = "https://generativelanguage.googleapis.com/v1beta"
@@ -66,6 +69,13 @@ class Settings(BaseSettings):
     unsplash_access_key: str = ""
 
     rate_limit_per_minute: int = 60
+
+    r2_account_id: str = ""
+    r2_bucket_name: str = "detroit-llm-storage"
+    r2_endpoint: str = ""
+    r2_region: str = "auto"
+    r2_access_key_id: str = ""
+    r2_secret_access_key: str = ""
 
     stripe_api_key: str = ""
     stripe_webhook_secret: str = ""

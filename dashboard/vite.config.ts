@@ -10,6 +10,7 @@ import http from 'node:http'
 const freshAgent = new http.Agent({ keepAlive: false, maxSockets: 64 })
 
 export default defineConfig({
+  esbuild: { drop: process.env.NODE_ENV === 'production' ? ['console', 'debugger'] : [] },
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

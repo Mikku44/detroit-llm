@@ -47,7 +47,7 @@ const ComposerLogger = () => {
   const isEmpty = useAuiState((s) => s.composer.isEmpty);
 
   useEffect(() => {
-    console.log("[Composer State]:", JSON.stringify({ text, isEditing, isEmpty }));
+    if (import.meta.env.DEV) console.log("[Composer State]:", JSON.stringify({ text, isEditing, isEmpty }));
   }, [text, isEditing, isEmpty]);
 
   return null;

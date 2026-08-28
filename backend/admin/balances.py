@@ -22,6 +22,7 @@ _TIMEOUT = 10
 _PROVIDERS = (
     ("deepseek", "DeepSeek", settings.deepseek_url, settings.deepseek_api_key),
     ("openrouter", "OpenRouter", settings.openrouter_url, settings.openrouter_api_key),
+    ("zai", "Z.AI", settings.z_ai_url, settings.z_api_key),
     ("dashscope", "DashScope", settings.dashscope_url, settings.dashscope_api_key),
     ("gemini", "Gemini", settings.gemini_url, settings.gemini_api_key),
 )
@@ -155,8 +156,9 @@ async def check_provider_balances() -> dict:
             results[key] = await _deepseek_balance(url, api_key)
         elif key == "openrouter":
             results[key] = await _openrouter_balance(url, api_key)
+        elif key == "zai":
+            results[key] = _unsupported(key, "Z.AI has no public balance endpoint via API key")
         else:
-            # DashScope / Gemini: no public balance endpoint.
             reason = {
                 "dashscope": "DashScope has no public balance endpoint via API key",
                 "gemini": "Gemini is free tier; no balance endpoint",
@@ -170,5 +172,8 @@ async def check_provider_balances() -> dict:
         results["stripe"] = await _stripe_balance(settings.stripe_api_key)
     else:
         results["stripe"] = _not_configured("stripe")
+
+    from backend.storage.r2 import is_configured as r2_configured
+    results["r2"] = _ok("r2", {"bucket": settings.r2_bucket_name, "endpoint": settings.r2_endpoint}) if r2_configured() else _not_configured("r2")
 
     return results

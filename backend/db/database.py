@@ -115,13 +115,16 @@ async def init_db():
         )
         await conn.run_sync(Base.metadata.create_all)
 
-        # Index for the daily usage-log housekeeping job (cleanup_usage.py).
-        try:
-            await conn.execute(
-                text("CREATE INDEX IF NOT EXISTS ix_usage_logs_created_at ON usage_logs (created_at)")
-            )
-        except Exception:
-            logger.warning("Failed to create ix_usage_logs_created_at", exc_info=True)
+        for idx_sql in (
+            "CREATE INDEX IF NOT EXISTS ix_usage_logs_created_at ON usage_logs (created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_usage_logs_api_key_created ON usage_logs (api_key_id, created_at)",
+            "CREATE INDEX IF NOT EXISTS ix_api_keys_user_id ON api_keys (user_id)",
+            "CREATE INDEX IF NOT EXISTS ix_api_keys_prefix ON api_keys (key_prefix)",
+        ):
+            try:
+                await conn.execute(text(idx_sql))
+            except Exception:
+                logger.warning("Failed to create index %s", idx_sql, exc_info=True)
 
         if settings.database_url.startswith("sqlite"):
             try:
@@ -155,6 +158,11 @@ async def init_db():
     async with conversations_engine.begin() as conn:
         from backend.db.models import Conversation, ConversationMessage
         await conn.run_sync(ConversationBase.metadata.create_all)
+        try:
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_conv_messages_cid_pos ON conversation_messages (conversation_id, position)"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_conversations_user_updated ON conversations (user_id, updated_at DESC)"))
+        except Exception:
+            pass
         if settings.conversations_db_url.startswith("sqlite"):
             for column_def in (
                 "ALTER TABLE conversation_messages ADD COLUMN finish_reason VARCHAR",

@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { useIsMobile } from '../hooks/use-mobile'
 import { LogOut, Key, BarChart3, LayoutDashboard, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard, Cookie, Users, CreditCard } from 'lucide-react'
-import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat } from 'react-icons/hi'
+import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat, HiOutlineShieldCheck } from 'react-icons/hi'
 import { ChatHistoryProvider, useChatHistory } from '../lib/chat-history'
 import Avatar from './Avatar'
 import UpgradeDialog from './UpgradeDialog'
@@ -47,10 +47,13 @@ import {
 const links = [
   { to: '/', label: 'Dashboard', icon: HiOutlineHome },
   { to: '/chat', label: 'Chat', icon: HiOutlineChat },
-  // { to: '/chat', label: 'Chat', icon: MessageSquare },
   { to: '/keys', label: 'API Keys', icon: HiOutlineKey },
   { to: '/usage', label: 'Usage', icon: HiOutlineChartBar },
   { to: '/docs', label: 'Docs', icon: HiOutlineBookOpen },
+]
+
+const adminLinks = [
+  { to: '/admin', label: 'System', icon: HiOutlineShieldCheck },
 ]
 
 const TIER_NAMES: Record<string, string> = {
@@ -148,6 +151,16 @@ function SidebarInner() {
               <SidebarMenuItem key={to}>
                 <SidebarMenuButton asChild isActive={to === '/chat' ? loc.pathname === '/chat' || loc.pathname.startsWith('/chat/') : loc.pathname === to}>
                   <NavLink to={to} end={to === '/'}>
+                    <Icon size={18} />
+                    <span>{label}</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+            {user?.is_owner && adminLinks.map(({ to, label, icon: Icon }) => (
+              <SidebarMenuItem key={to}>
+                <SidebarMenuButton asChild isActive={loc.pathname === to}>
+                  <NavLink to={to}>
                     <Icon size={18} />
                     <span>{label}</span>
                   </NavLink>

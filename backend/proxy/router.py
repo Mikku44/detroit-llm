@@ -13,12 +13,18 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from cachetools import TTLCache
+
 from backend.config import settings, TIER_OPTIONS
 from backend.db.database import get_db
 from backend.db.models import UsageLog, ApiKey, User, ImageUsage
 from backend.auth.middleware import require_api_key
 from backend.auth.session import require_session
 from backend.proxy.tokens import count_messages_tokens, count_text_tokens, count_responses_input_tokens
+
+_usage_cache: TTLCache = TTLCache(maxsize=2048, ttl=45)
+_user_cache: TTLCache = TTLCache(maxsize=1024, ttl=60)
+_models_cache: dict = {}
 
 router = APIRouter()
 
@@ -27,6 +33,55 @@ DEEPSEEK_TIMEOUT = 300
 
 # DeepSeek-only chat params that Gemini's OpenAI-compatible endpoint may reject.
 GEMINI_STRIP_KEYS = ("reasoning", "output_config", "reasoning_effort", "thinking")
+
+_NATIVE_VISION_EXACT = {"deepseek-v4-flash-vision-exp"}
+_NATIVE_VISION_PREFIXES = ("qwen", "glm-", "stealth/")
+
+
+def _supports_native_vision(model: str) -> bool:
+    m = (model or "").lower()
+    if m in _NATIVE_VISION_EXACT:
+        return True
+    for p in _NATIVE_VISION_PREFIXES:
+        if m.startswith(p):
+            return True
+    if "vision" in m or "-vl" in m or "4.6v" in m:
+        return True
+    return False
+
+
+def _extract_upstream_error_message(raw: bytes, default: str = "Upstream request failed") -> str:
+    try:
+        data = json.loads(raw.decode(errors="replace"))
+    except Exception:
+        try:
+            text = raw.decode(errors="replace").strip()
+            return text[:500] if text else default
+        except Exception:
+            return default
+    if isinstance(data, dict):
+        err = data.get("error")
+        if isinstance(err, dict):
+            code = err.get("code")
+            msg = err.get("message") or err.get("msg") or err.get("detail")
+            if msg:
+                return f"[{code}] {msg}" if code else str(msg)
+            if isinstance(code, str) and code:
+                return f"[{code}] {default}"
+        if isinstance(data.get("message"), str) and data["message"]:
+            return data["message"]
+        if isinstance(data.get("detail"), str) and data["detail"]:
+            return data["detail"]
+        try:
+            return json.dumps(data, ensure_ascii=False)[:500]
+        except Exception:
+            pass
+    return default
+
+
+def _sse_error_chunk(message: str, model: str) -> bytes:
+    payload = {"choices": [{"index": 0, "delta": {"content": message}, "finish_reason": None}], "model": model, "object": "chat.completion.chunk"}
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode(errors="replace")
 
 
 def _has_image_content(body: dict) -> bool:
@@ -301,7 +356,9 @@ async def _find_api_key(db: AsyncSession, user_id: str) -> ApiKey | None:
 
 
 async def _tier_usage(db: AsyncSession, user_id: str) -> tuple[int, int]:
-    """Total tokens used over the last 7 days (weekly) and 30 days (monthly)."""
+    cached = _usage_cache.get(user_id)
+    if cached is not None:
+        return cached
     from sqlalchemy import func, select
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -317,7 +374,24 @@ async def _tier_usage(db: AsyncSession, user_id: str) -> tuple[int, int]:
 
     weekly = await sum_since(now - timedelta(days=7))
     monthly = await sum_since(now - timedelta(days=30))
+    _usage_cache[user_id] = (weekly, monthly)
     return weekly, monthly
+
+
+def _invalidate_usage_cache(user_id: str) -> None:
+    _usage_cache.pop(user_id, None)
+
+
+async def _cached_user(db: AsyncSession, user_id: str) -> User | None:
+    cached = _user_cache.get(user_id)
+    if cached is not None:
+        return cached
+    from sqlalchemy import select
+    stmt = select(User).where(User.id == user_id)
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if user:
+        _user_cache[user_id] = user
+    return user
 
 
 async def require_access(
@@ -329,10 +403,7 @@ async def require_access(
     Owner/member tiers have unlimited access. Free-tier users are allowed in but
     limited to a weekly and monthly total-token budget.
     """
-    from sqlalchemy import select
-    stmt = select(User).where(User.id == user_id)
-    result = await db.execute(stmt)
-    user = result.scalar_one_or_none()
+    user = await _cached_user(db, user_id)
     if not user:
         raise HTTPException(status_code=403, detail="Membership required")
 
@@ -382,12 +453,11 @@ async def require_access(
 
 
 FREE_MODEL_ONLY_MESSAGE = (
-    "Free tier only includes the flash and stealth/ox-alpha models. "
+    "Free tier only includes the flash and glm-5.3-flash models. "
     "Upgrade to a paid membership for pro and other models."
 )
 
-# Non-flash models that are still allowed on the free tier.
-FREE_TIER_EXTRA_MODELS = {"stealth/ox-alpha"}
+FREE_TIER_EXTRA_MODELS = {"glm-4.7-flash", "glm-4.5-flash", "glm-4.6v-flash"}
 
 
 def _is_flash_model(model: str) -> bool:
@@ -478,6 +548,7 @@ async def _log_usage(
         )
         db.add(log)
         await db.commit()
+        _invalidate_usage_cache(user_id)
 
 
 # ---------------------------------------------------------------------------
@@ -1175,13 +1246,11 @@ def _parse_wants_image(content: str) -> bool | None:
 
 
 async def _classify_image_intent(messages: list) -> bool | None:
-    """Ask the upstream LLM whether the conversation wants a new image.
-
-    Uses the full history (last 40 turns) so follow-ups and context are honored.
-    Returns True/False on a clean answer, or None when the classifier is
-    unavailable (no upstream key, network/HTTP error, or unparseable reply);
-    the caller then falls back to keyword matching so chat never depends on it.
-    """
+    if isinstance(messages, list):
+        last_text = _last_user_text(messages)
+        if last_text and not re.search(r"(image|picture|photo|illustration|logo|thumbnail|cover|รูป|ภาพ|วาด|สร้าง)", last_text, re.IGNORECASE):
+            if not re.search(r"(draw|generate|create|make)", last_text, re.IGNORECASE):
+                return False
     if not isinstance(messages, list):
         messages = []
     window = messages[-40:] if len(messages) > 40 else messages
@@ -1390,6 +1459,14 @@ async def _dashscope_image(prompt: str, size: str) -> dict:
 
     raw, ctype = await _download_image_bytes(image_url)
     mime = ctype if ctype.startswith("image/") else "image/jpeg"
+    try:
+        from backend.storage.r2 import upload_bytes, is_configured
+        if is_configured():
+            url = upload_bytes(raw, mime, prefix="images/generated")
+            if url:
+                return {"ref": url, "kind": "url"}
+    except Exception as e:
+        print(f"[r2] dashscope upload fallback: {e}")
     return {"ref": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}", "kind": "data_uri"}
 
 
@@ -2084,7 +2161,7 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
     body.pop("image_gen", None)
     body.pop("web_search", None)
 
-    # Media routing: qwen3.7-flash & stealth/ox-alpha support [text,image,video],
+    # Media routing: qwen3.7-flash & glm-5.3-flash support [text,image,video],
     # deepseek-v4-flash-vision-exp supports [text,image] only.
     has_image = _has_image_content(body)
     has_video = _has_video_content(body)
@@ -2093,7 +2170,7 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
             if has_video:
                 raise HTTPException(
                     status_code=400,
-                    detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or stealth/ox-alpha for video.",
+                    detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or glm-5.3-flash for video.",
                 )
             if not settings.deepseek_api_key:
                 raise HTTPException(
@@ -2102,7 +2179,7 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
                 )
             resp = await _proxy_to_deepseek(db, user_id, model, body, is_stream, fallback_prompt_tokens)
             return _with_log(resp, user_id, model, body.get("messages", []))
-        if model.lower().startswith("qwen") or model.lower() == "stealth/ox-alpha":
+        if _supports_native_vision(model):
             pass
         else:
             if not settings.gemini_api_key:
@@ -2139,14 +2216,13 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
         resp = await _proxy_to_dashscope(db, user_id, model, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, model, body.get("messages", []))
 
-    # OpenRouter models (e.g. stealth/ox-alpha) route to OpenRouter.
-    if model.lower() == "stealth/ox-alpha":
-        if not settings.openrouter_api_key:
+    if model.lower().startswith("glm-") or model.lower() == "stealth/ox-alpha":
+        if not settings.z_api_key:
             raise HTTPException(
                 status_code=503,
-                detail="stealth/ox-alpha requires OPENROUTER_API_KEY. Set it in the server environment.",
+                detail="glm-5.3-flash requires Z_API_KEY. Set it in the server environment.",
             )
-        resp = await _proxy_to_openrouter(db, user_id, model, body, is_stream, fallback_prompt_tokens)
+        resp = await _proxy_to_zai(db, user_id, model, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, model, body.get("messages", []))
 
     # If a DeepSeek key is configured, proxy to the real DeepSeek API.
@@ -2401,8 +2477,8 @@ async def responses_api(
     if has_image or has_video:
         if model == "deepseek-v4-flash-vision-exp":
             if has_video:
-                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or stealth/ox-alpha for video.")
-        elif model.lower().startswith("qwen") or model.lower() == "stealth/ox-alpha":
+                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or glm-5.3-flash for video.")
+        elif _supports_native_vision(model):
             pass
         else:
             if not settings.gemini_api_key:
@@ -2442,7 +2518,9 @@ async def responses_api(
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
-                            yield error_body
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_event("error", {"type": "error", "code": "upstream_error", "message": f"⚠️ {model}: {msg}"}).encode()
+                            yield _sse_event("response.output_text.delta", {"type": "response.output_text.delta", "delta": f"⚠️ {model}: {msg} — Please try again later.", "item_id": "msg_responses", "output_index": 0, "content_index": 0}).encode()
                             return
                         async for chunk in resp.aiter_bytes():
                             usage = _responses_usage_from_chunk(chunk)
@@ -2486,6 +2564,7 @@ CLAUDE_ALIAS_TO_MODEL = {
     "claude-haiku-4-5": "deepseek-v4-flash",
     "claude-3-haiku": "deepseek-v4-flash",
     "claude-sonnet-4-20250514": "deepseek-v4-pro",
+    "stealth/ox-alpha": "glm-5.3-flash",
 }
 
 def _resolve_model(model: str) -> str:
@@ -2506,7 +2585,7 @@ def _image_engine_model(model: str) -> str:
     engine = _resolve_model(model)
     if (
         engine.lower().startswith("qwen")
-        or engine.lower() == "stealth/ox-alpha"
+        or engine.lower().startswith("glm-") or engine.lower() == "stealth/ox-alpha"
         or engine.startswith("gemini-")
         or engine in ("gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation")
     ):
@@ -2563,8 +2642,8 @@ async def anthropic_messages(
     if has_image or has_video:
         if model == "deepseek-v4-flash-vision-exp":
             if has_video:
-                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or stealth/ox-alpha for video.")
-        elif model.lower().startswith("qwen") or model.lower() == "stealth/ox-alpha":
+                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or glm-5.3-flash for video.")
+        elif _supports_native_vision(model):
             pass
         else:
             if not settings.gemini_api_key:
@@ -2676,7 +2755,12 @@ async def anthropic_messages(
                     async with client.stream("POST", url, json=payload, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
-                            yield error_body
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_event("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+                            yield _sse_event("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": f"⚠️ {upstream_model}: {msg} — Please try again later."}})
+                            yield _sse_event("content_block_stop", {"type": "content_block_stop", "index": 0})
+                            yield _sse_event("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 1}})
+                            yield _sse_event("message_stop", {"type": "message_stop"})
                             return
                         yield _sse_event(
                             "message_start",
@@ -2800,7 +2884,10 @@ async def _proxy_to_deepseek(
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
-                            yield error_body
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_error_chunk(f"⚠️ {model}: {msg} — Please try again later.", model)
+                            yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                            yield b'data: [DONE]\n\n'
                             return
                         async for chunk in resp.aiter_bytes():
                             usage = _parse_usage_from_chunk(chunk)
@@ -2866,7 +2953,10 @@ async def _proxy_to_dashscope(
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
-                            yield error_body
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_error_chunk(f"⚠️ {model}: {msg} — Please try again later.", model)
+                            yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                            yield b'data: [DONE]\n\n'
                             return
                         async for chunk in resp.aiter_bytes():
                             usage = _parse_usage_from_chunk(chunk)
@@ -2909,6 +2999,13 @@ def _openrouter_headers() -> dict:
         "Authorization": f"Bearer {settings.openrouter_api_key}",
         "HTTP-Referer": settings.dashboard_url,
         "X-Title": "Detroit LLM Gateway",
+    }
+
+
+def _zai_headers() -> dict:
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.z_api_key}",
     }
 
 
@@ -2958,7 +3055,10 @@ async def _proxy_to_openrouter(
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
-                            yield error_body
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_error_chunk(f"⚠️ {model}: {msg} — Please try again later.", model)
+                            yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                            yield b'data: [DONE]\n\n'
                             return
                         async for chunk in resp.aiter_bytes():
                             usage = _parse_usage_from_chunk(chunk)
@@ -2995,6 +3095,58 @@ async def _proxy_to_openrouter(
         return JSONResponse(content=data, status_code=resp.status_code)
 
 
+async def _proxy_to_zai(
+    db: AsyncSession,
+    user_id: str,
+    model: str,
+    body: dict,
+    is_stream: bool,
+    fallback_prompt_tokens: int,
+):
+    url = f"{settings.z_ai_url.rstrip('/')}/chat/completions"
+    headers = _zai_headers()
+    if is_stream:
+        async def zai_stream():
+            prompt_tokens = 0
+            completion_tokens = 0
+            completion_text = ""
+            try:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+                    async with client.stream("POST", url, json=body, headers=headers) as resp:
+                        if resp.status_code >= 400:
+                            error_body = await resp.aread()
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_error_chunk(f"⚠️ {model}: {msg} — Please try again later.", model)
+                            yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                            yield b'data: [DONE]\n\n'
+                            return
+                        async for chunk in resp.aiter_bytes():
+                            usage = _parse_usage_from_chunk(chunk)
+                            if usage:
+                                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                                completion_tokens = usage.get("completion_tokens", completion_tokens)
+                            completion_text += _text_from_chunk(chunk)
+                            yield chunk
+            finally:
+                if not prompt_tokens:
+                    prompt_tokens = fallback_prompt_tokens
+                if not completion_tokens:
+                    completion_tokens = count_text_tokens(completion_text)
+                await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+        return StreamingResponse(_deadline_wrapper(zai_stream()), media_type="text/event-stream")
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        data = resp.json()
+        usage = data.get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens", 0) or fallback_prompt_tokens
+        completion_tokens = usage.get("completion_tokens", 0)
+        if not completion_tokens:
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            completion_tokens = count_text_tokens(content)
+        await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+        return JSONResponse(content=data, status_code=resp.status_code)
+
+
 async def _proxy_dashscope_responses(
     db: AsyncSession,
     user_id: str,
@@ -3017,7 +3169,9 @@ async def _proxy_dashscope_responses(
                     async with client.stream("POST", url, json=body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
-                            yield error_body
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_event("error", {"type": "error", "code": "upstream_error", "message": f"⚠️ {model}: {msg}"}).encode()
+                            yield _sse_event("response.completed", {"type": "response.completed", "response": {"id": f"resp_{int(time.time())}", "object": "response", "status": "failed", "model": model, "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": f"⚠️ {model}: {msg} — Please try again later."}]}]}}).encode()
                             return
                         async for chunk in resp.aiter_bytes():
                             usage = _responses_usage_from_chunk(chunk)
@@ -3078,7 +3232,10 @@ async def _proxy_to_gemini(
                     async with client.stream("POST", url, json=gemini_body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
-                            yield error_body
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_error_chunk(f"⚠️ {settings.gemini_model}: {msg} — Please try again later.", settings.gemini_model)
+                            yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                            yield b'data: [DONE]\n\n'
                             return
                         async for chunk in resp.aiter_bytes():
                             usage = _parse_usage_from_chunk(chunk)
@@ -3164,19 +3321,18 @@ async def _proxy_gemini_responses(
                     async with client.stream("POST", url, json=gemini_body, headers=headers) as resp:
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
-                            try:
-                                detail = json.loads(error_body).get("error", {}).get(
-                                    "message", error_body.decode(errors="replace")
-                                )
-                            except Exception:
-                                detail = error_body.decode(errors="replace")
+                            detail = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
                             yield _sse_event(
                                 "error",
                                 {
                                     "type": "error",
                                     "code": "gemini_upstream_error",
-                                    "message": detail,
+                                    "message": f"⚠️ {settings.gemini_model}: {detail} — Please try again later.",
                                 },
+                            )
+                            yield _sse_event(
+                                "response.output_text.delta",
+                                {"type": "response.output_text.delta", "delta": f"⚠️ {settings.gemini_model}: {detail} — Please try again later.", "item_id": "msg_responses", "output_index": 0, "content_index": 0},
                             )
                             return
                         yield _sse_event(
@@ -3388,7 +3544,7 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
     # Claude Code sends is found) alongside whatever the upstream provides.
     #
     # A dashboard session token narrows the list to the models the signed-in
-    # user may actually call (free tier = flash + stealth/ox-alpha). API keys
+    # user may actually call (free tier = flash + glm-5.3-flash). API keys
     # and unauthenticated harness clients still get the full list.
     free_user = False
     auth = request.headers.get("authorization", "")
@@ -3462,8 +3618,26 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
         {
             "object": "model",
             "type": "model",
-            "id": "stealth/ox-alpha",
-            "display_name": "stealth/ox-alpha (OpenRouter)",
+            "id": "glm-5.3-flash",
+            "display_name": "glm-5.3-flash (Z.AI)",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "glm-4.7-flash",
+            "display_name": "glm-4.7-flash (Z.AI)",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "glm-4.5-flash",
+            "display_name": "glm-4.5-flash (Z.AI)",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "glm-4.6v-flash",
+            "display_name": "glm-4.6v-flash (Z.AI)",
         },
         {
             "object": "model",
@@ -3491,8 +3665,14 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
         },
     ]
 
+    cache_key = f"models:{free_user}"
+    cached = _models_cache.get(cache_key)
+    if cached and (time.monotonic() - cached["ts"] < 300):
+        data_cached = cached["data"]
+        if free_user:
+            data_cached = [m for m in data_cached if _is_free_tier_model(m.get("id") or "")]
+        return JSONResponse(content={"object": "list", "data": data_cached})
     upstream = None
-    # When a DeepSeek key is configured, return the real DeepSeek model list.
     if settings.deepseek_api_key:
         try:
             async with httpx.AsyncClient(timeout=30, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
@@ -3515,6 +3695,8 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             g["id"] for g in gateway_models
         }:
             data.append(m)
+    _models_cache["all"] = {"data": data, "ts": time.monotonic()}
+    _models_cache[cache_key] = {"data": data, "ts": time.monotonic()}
     if free_user:
         data = [m for m in data if _is_free_tier_model(m.get("id") or "")]
     return JSONResponse(content={"object": "list", "data": data})

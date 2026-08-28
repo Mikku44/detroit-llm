@@ -4,7 +4,6 @@ import {
 } from "@assistant-ui/react";
 
 const getMessageText = (message: ThreadMessage): string => {
-  console.log("getMessageText", message);
   const parts = "content" in message ? (message.content as readonly unknown[]) : [];
   return (parts as { type: string; text?: string }[])
     .filter((p) => p.type === "text" && typeof p.text === "string")

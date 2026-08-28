@@ -54,7 +54,10 @@ const ALLOWED_CHAT_MODELS = new Set([
   'deepseek-v4-flash-vision-exp',
   'qwen3.7-flash',
   'z-image-turbo',
-  'stealth/ox-alpha',
+  'glm-5.3-flash',
+  'glm-4.7-flash',
+  'glm-4.5-flash',
+  'glm-4.6v-flash',
 ])
 
 const MODEL_META: Record<string, ModelMeta> = {
@@ -83,10 +86,25 @@ const MODEL_META: Record<string, ModelMeta> = {
     desc: 'Image — DashScope text-to-image',
     badges: ['image'],
   },
-  'stealth/ox-alpha': {
-    name: 'Stealth Ox-Alpha',
-    desc: 'Text + Image + Video — full multimodal',
-    badges: ['text', 'image', 'video'],
+  'glm-5.3-flash': {
+    name: 'GLM-5.3-Flash',
+    desc: 'Text + Image + Video — Z.AI fast reasoning (replaces Ox-Alpha)',
+    badges: ['text', 'image', 'video', 'reasoning'],
+  },
+  'glm-4.7-flash': {
+    name: 'GLM-4.7-Flash',
+    desc: 'Text + Image + Video — Z.AI',
+    badges: ['text', 'image', 'video', 'reasoning'],
+  },
+  'glm-4.5-flash': {
+    name: 'GLM-4.5-Flash',
+    desc: 'Text + Image + Video — Z.AI',
+    badges: ['text', 'image', 'video', 'reasoning'],
+  },
+  'glm-4.6v-flash': {
+    name: 'GLM-4.6V-Flash',
+    desc: 'Text + Image + Video — Z.AI vision',
+    badges: ['text', 'image', 'video', 'vision'],
   },
   'gemini-2.5-flash': {
     name: 'Gemini 2.5 Flash',
@@ -117,7 +135,10 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'deepseek-v4-flash-vision-exp': 1000000,
   'qwen3.7-flash': 1000000,
   'z-image-turbo': 1000000,
-  'stealth/ox-alpha': 1000000,
+  'glm-5.3-flash': 1000000,
+  'glm-4.7-flash': 1000000,
+  'glm-4.5-flash': 1000000,
+  'glm-4.6v-flash': 1000000,
   'gemini-2.5-flash': 1000000,
 }
 
@@ -162,6 +183,15 @@ function parseSse(buffer: string, onContent: (text: string) => void, onReasoning
     if (data === '[DONE]') continue
     try {
       const json = JSON.parse(data)
+      if (json?.error && typeof json.error.message === 'string' && json.error.message) {
+        const code = json.error.code ? `[${json.error.code}] ` : ''
+        onContent(`${code}${json.error.message}`)
+        continue
+      }
+      if (json?.error && typeof json.error === 'string') {
+        onContent(json.error)
+        continue
+      }
       const delta = json?.choices?.[0]?.delta || {}
       if (typeof delta.content === 'string' && delta.content) onContent(delta.content)
       if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) onReasoning(delta.reasoning_content)
@@ -178,7 +208,6 @@ function parseSse(buffer: string, onContent: (text: string) => void, onReasoning
       }
       if (meta.model || meta.usage || meta.finish_reason != null) onMeta(meta)
     } catch {
-      /* partial json across chunks, keep for next round */
       last = `${line}\n${last}`
     }
   }
@@ -204,8 +233,25 @@ function friendlyError(res: Response, raw: string, membersUrl: string): { conten
   try {
     const json = JSON.parse(raw)
     if (json && typeof json.detail === 'string' && json.detail) return { content: json.detail }
+    if (json?.error) {
+      const err = json.error
+      if (typeof err === 'string' && err) return { content: err }
+      if (typeof err.message === 'string' && err.message) {
+        const code = err.code ? `[${err.code}] ` : ''
+        return { content: `${code}${err.message}` }
+      }
+      if (typeof err.msg === 'string' && err.msg) return { content: err.msg }
+    }
+    if (typeof json?.message === 'string' && json.message) return { content: json.message }
   } catch {
     /* fall through to raw */
+  }
+  if (raw && raw.length < 800) {
+    try {
+      const j = JSON.parse(raw)
+      if (j?.error?.message) return { content: `[${j.error.code ?? 'error'}] ${j.error.message}` }
+    } catch {}
+    return { content: raw }
   }
   return { content: raw || `Something went wrong (error ${res.status}). Please try again.` }
 }
@@ -359,10 +405,15 @@ export default function Chat3() {
   const [isVision, setIsVision] = useState(false)
   const [compacting, setCompacting] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
-  const { conversations, activeId, setActiveId, save: saveConversation, getMessages } = useChatHistory()
+  const [hasMore, setHasMore] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [oldestPos, setOldestPos] = useState<number | null>(null)
+  const { conversations, activeId, setActiveId, save: saveConversation, getMessagesPage, appendMessages } = useChatHistory()
   const convSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const modelRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const topSentinelRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -375,47 +426,39 @@ export default function Chat3() {
     api.health().then((h) => setMembersUrl((h as { members_url?: string }).members_url || '')).catch(() => {})
   }, [])
 
-  // Open the conversation given by the URL (/chat/:id).
+  // Open the conversation given by the URL (/chat/:id). /chat without id is always a new chat.
   useEffect(() => {
-    if (id && id !== activeId) setActiveId(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id])
+    if (id) {
+      if (id !== activeId) setActiveId(id)
+    } else if (activeId) {
+      setActiveId(null)
+    }
+  }, [id, activeId])
 
-  // If no conversation is active yet, load the most recent saved one for this user.
   useEffect(() => {
-    if (activeId) {
-      setHistoryLoaded(true)
-      return
-    }
-    if (conversations.length === 0) {
-      setHistoryLoaded(true)
-      return
-    }
-    const latest = conversations[0]
-    getMessages(latest.id)
-      .then((msgs) => {
-        if (msgs.length) setMessages(msgs)
-        setActiveId(latest.id)
-        setHistoryLoaded(true)
-      })
-      .catch(() => setHistoryLoaded(true))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversations])
+    if (!activeId) setHistoryLoaded(true)
+  }, [activeId])
 
   // Load messages whenever the active conversation changes (via the layout sidebar).
   useEffect(() => {
     if (!activeId) {
       setMessages([])
+      setHasMore(true)
+      setOldestPos(null)
       setHistoryLoaded(true)
       return
     }
     let cancelled = false
     setHistoryLoaded(false)
     setMessages([])
-    getMessages(activeId)
-      .then((msgs) => {
+    setHasMore(true)
+    setOldestPos(null)
+    getMessagesPage(activeId, { limit: 30 })
+      .then(({ messages: msgs, hasMore: hm, oldestPosition }) => {
         if (cancelled) return
         setMessages(msgs)
+        setHasMore(hm)
+        setOldestPos(oldestPosition)
         setHistoryLoaded(true)
       })
       .catch(() => setHistoryLoaded(true))
@@ -425,9 +468,49 @@ export default function Chat3() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeId])
 
-  // Debounced save of the current conversation through the shared chat history context.
+  const loadMore = async () => {
+    if (!activeId || !hasMore || loadingMore || oldestPos == null) return
+    setLoadingMore(true)
+    const container = scrollRef.current
+    const prevHeight = container?.scrollHeight ?? 0
+    const prevTop = container?.scrollTop ?? 0
+    try {
+      const page = await getMessagesPage(activeId, { limit: 30, before: oldestPos })
+      if (page.messages.length) {
+        setMessages((prev) => [...page.messages, ...prev])
+        setOldestPos(page.oldestPosition)
+        setHasMore(page.hasMore)
+        requestAnimationFrame(() => {
+          if (container) container.scrollTop = container.scrollHeight - prevHeight + prevTop
+        })
+      } else {
+        setHasMore(false)
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  useEffect(() => {
+    const el = topSentinelRef.current
+    const container = scrollRef.current
+    if (!el || !container || !hasMore || !historyLoaded) return
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) loadMore()
+      },
+      { root: container, rootMargin: '100px', threshold: 0 }
+    )
+    obs.observe(el)
+    return () => obs.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasMore, historyLoaded, oldestPos, activeId])
+
   useEffect(() => {
     if (!historyLoaded || busy || messages.length === 0) return
+    if (activeId) return
     if (convSaveTimer.current) clearTimeout(convSaveTimer.current)
     convSaveTimer.current = setTimeout(async () => {
       const convId = await saveConversation(activeId, messages, model || undefined)
@@ -581,7 +664,7 @@ export default function Chat3() {
     const hasVideo = attachments.some((a) => a.kind === 'video')
     const hasMedia = hasImage || hasVideo
     const requestModel = freeTier
-      ? model.includes('flash') || model === 'stealth/ox-alpha'
+      ? model.includes('flash') || model === 'glm-5.3-flash'
         ? model
         : 'deepseek-v4-flash'
       : model
@@ -619,6 +702,10 @@ export default function Chat3() {
 
     const controller = new AbortController()
     abortRef.current = controller
+    let _logAcc = ''
+    let _respModel = upstreamModel
+    let _finishReason: string | null | undefined = null
+    let _usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined = undefined
 
     try {
       const res = await fetch('/api/web/chat/completions', {
@@ -647,20 +734,17 @@ export default function Chat3() {
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''
-      let logAcc = ''
       const startedAt = performance.now()
       let lastChunkAt = performance.now()
       let timedOut = false
-      let respModel = ''
-      let finishReason: string | null | undefined
-      let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined
 
       const appendToLast = (key: 'content' | 'reasoning', text: string) => {
+        const isUpstreamError = text.includes('⚠️') || /\[13\d{2,3}\]/.test(text) || text.toLowerCase().includes('overloaded') || text.toLowerCase().includes('temporarily overloaded')
         setMessages((m) => {
           const copy = [...m]
           const idx = copy.length - 1
           if (copy[idx]?.role === 'assistant') {
-            copy[idx] = { ...copy[idx], [key]: (copy[idx][key] ?? '') + text }
+            copy[idx] = { ...copy[idx], [key]: (copy[idx][key] ?? '') + text, ...(isUpstreamError && key === 'content' ? { error: true } : {}) }
           }
           return copy
         })
@@ -675,9 +759,9 @@ export default function Chat3() {
             copy[idx] = {
               ...copy[idx],
               durationMs,
-              model: respModel || copy[idx].model,
-              finish_reason: finishReason,
-              usage: usage || copy[idx].usage,
+              model: _respModel || copy[idx].model,
+              finish_reason: _finishReason,
+              usage: _usage || copy[idx].usage,
             }
           }
           return copy
@@ -701,27 +785,47 @@ export default function Chat3() {
         lastChunkAt = performance.now()
         const decoded = decoder.decode(value, { stream: true })
         buffer += decoded
-        if (decoded.length < 2000) {
+        if (import.meta.env.DEV && decoded.length < 2000) {
           console.log('[Chat3 SSE chunk]', decoded)
         }
         buffer = parseSse(
           buffer,
           (c) => {
-            if (logAcc.length < 2000) logAcc += c
+            if (_logAcc.length < 2000) _logAcc += c
             appendToLast('content', c)
           },
           (r) => {
             if (thinking) appendToLast('reasoning', r)
           },
           (meta) => {
-            if (meta.model) respModel = meta.model
-            if (meta.finish_reason != null) finishReason = meta.finish_reason
-            if (meta.usage) usage = meta.usage
+            if (meta.model) _respModel = meta.model
+            if (meta.finish_reason != null) _finishReason = meta.finish_reason
+            if (meta.usage) _usage = meta.usage
           },
         )
       }
-      console.log('[Chat3 response]', logAcc)
+      if (import.meta.env.DEV) console.log('[Chat3 response]', _logAcc)
       patchLastMeta()
+      if (_logAcc && (_logAcc.includes('⚠️') || /\[13\d{2,3}\]/.test(_logAcc))) {
+        setMessages((m) => {
+          const copy = [...m]
+          const idx = copy.length - 1
+          if (copy[idx]?.role === 'assistant') copy[idx] = { ...copy[idx], error: true }
+          return copy
+        })
+      }
+      if (_logAcc) {
+        const isErr = _logAcc.includes('⚠️') || /\[13\d{2,3}\]/.test(_logAcc)
+        const userMsg: Msg = { role: 'user', content: text, attachments, model: requestModel }
+        const asstMsg: Msg = { role: 'assistant', content: _logAcc, model: _respModel, usage: _usage, finish_reason: _finishReason, ...(isErr ? { error: true } : {}) }
+        if (activeId) appendMessages(activeId, [userMsg, asstMsg]).catch(() => {})
+        else {
+          const toSave = [...messages, userMsg, asstMsg]
+          saveConversation(null, toSave, model || undefined).then((newId) => {
+            if (newId) navigate(`/chat/${newId}`, { replace: true })
+          }).catch(() => {})
+        }
+      }
       if (timedOut) {
         setMessages((m) => {
           const copy = [...m]
@@ -905,7 +1009,7 @@ export default function Chat3() {
       </div>
 
       {/* Messages / empty state */}
-      <div className="flex-1 overflow-y-auto min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0">
         {!historyLoaded ? (
           <div className="h-full flex flex-col items-center justify-center gap-4 px-4">
             <IOSLoading size={40} />
@@ -930,6 +1034,9 @@ export default function Chat3() {
           </div>
         ) : (
           <div className="mx-auto max-w-3xl px-4 py-6 space-y-8">
+            <div ref={topSentinelRef} className="h-px" />
+            {loadingMore && <div className="flex justify-center py-2 text-xs text-zinc-500">Loading older messages…</div>}
+            {!hasMore && messages.length > 0 && <div className="text-center text-xs text-zinc-600">Beginning of conversation</div>}
             {messages.map((m, i) => (
               <div key={i} className={`flex gap-4 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
                 <div className="shrink-0">

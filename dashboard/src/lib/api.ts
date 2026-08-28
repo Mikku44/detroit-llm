@@ -59,6 +59,7 @@ export const api = {
     request(`/admin/users/${userId}/verify`, { method: 'POST', body: JSON.stringify({ is_verified: isVerified }) }),
 
   status: () => request('/admin/status'),
+  getBalances: () => request('/admin/balances'),
 
   verifyMembers: () => request('/auth/youtube/verify-members', { method: 'POST' }),
 
@@ -70,8 +71,29 @@ export const api = {
 
   setStoredLevels: (payload: any) => request('/auth/youtube/levels', { method: 'POST', body: JSON.stringify(payload) }),
 
-  listConversations: () => request('/api/conversations'),
-  getConversation: (id: string) => request(`/api/conversations/${id}`),
+  listConversations: (params: { limit?: number; offset?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (params.limit) q.set('limit', String(params.limit))
+    if (params.offset) q.set('offset', String(params.offset))
+    const qs = q.toString() ? `?${q}` : ''
+    return request(`/api/conversations${qs}`)
+  },
+  getConversation: (id: string, params: { limit?: number; before?: number; all?: boolean } = {}) => {
+    const q = new URLSearchParams()
+    if (params.limit) q.set('limit', String(params.limit))
+    if (params.before != null) q.set('before', String(params.before))
+    if (params.all) q.set('all', 'true')
+    const qs = q.toString() ? `?${q}` : ''
+    return request(`/api/conversations/${id}${qs}`)
+  },
+  getConversationMessages: (id: string, params: { limit?: number; before?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (params.limit) q.set('limit', String(params.limit))
+    if (params.before != null) q.set('before', String(params.before))
+    const qs = q.toString() ? `?${q}` : ''
+    return request(`/api/conversations/${id}/messages${qs}`)
+  },
+  appendMessages: (id: string, messages: any[]) => request(`/api/conversations/${id}/messages`, { method: 'POST', body: JSON.stringify({ messages }) }),
   createConversation: (data: any) => request('/api/conversations', { method: 'POST', body: JSON.stringify(data) }),
   updateConversation: (id: string, data: any) => request(`/api/conversations/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteConversation: (id: string) => request(`/api/conversations/${id}`, { method: 'DELETE' }),

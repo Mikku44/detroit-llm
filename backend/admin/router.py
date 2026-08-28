@@ -4,6 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, cast, Date
 
+import time as _time
+from cachetools import TTLCache
+
 from backend.config import settings, TIER_OPTIONS
 from backend.db.database import get_db, _is_postgres
 from backend.db.models import User, ApiKey, UsageLog, ImageUsage, Payment
@@ -12,6 +15,8 @@ from backend.auth.api_keys import create_api_key_for_user, revoke_api_key
 from backend.auth.key_encryption import decrypt_api_key
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+_status_cache: TTLCache = TTLCache(maxsize=32, ttl=15)
 
 
 async def _require_owner(user_id: str, db: AsyncSession) -> User:
@@ -442,7 +447,9 @@ async def get_status(
 ):
     """Owner-only status: upstream health, usage balance, users, and API keys."""
     await _require_owner(user_id, db)
-
+    ck = _status_cache.get("status")
+    if ck is not None:
+        return ck
     import httpx
 
     now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -506,7 +513,7 @@ async def get_status(
     except Exception:
         pass
 
-    return {
+    result = {
         "status": "ok",
         "version": "0.1.0",
         "time": now_naive.isoformat(),
@@ -516,6 +523,8 @@ async def get_status(
             "providers": {
                 "deepseek_configured": bool(settings.deepseek_api_key),
                 "gemini_configured": bool(settings.gemini_api_key),
+                "zai_configured": bool(settings.z_api_key),
+                "openrouter_configured": bool(settings.openrouter_api_key),
                 "image_provider": settings.image_provider,
             },
         },
@@ -539,3 +548,5 @@ async def get_status(
         },
         "api_keys": {"total": total_keys, "active": active_keys},
     }
+    _status_cache["status"] = result
+    return result

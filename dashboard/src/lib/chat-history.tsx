@@ -27,7 +27,9 @@ type ChatHistoryContextType = {
   setActiveId: (id: string | null) => void
   save: (convId: string | null, msgs: Message[], model?: string) => Promise<string | null>
   remove: (convId: string) => void
-  getMessages: (convId: string) => Promise<Message[]>
+  getMessages: (convId: string, opts?: { limit?: number; before?: number }) => Promise<Message[]>
+  getMessagesPage: (convId: string, opts?: { limit?: number; before?: number }) => Promise<{ messages: Message[]; hasMore: boolean; oldestPosition: number | null; total: number }>
+  appendMessages: (convId: string, msgs: Message[]) => Promise<void>
   refresh: () => Promise<void>
 }
 
@@ -105,17 +107,36 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
     [refresh],
   )
 
-  const getMessages = useCallback(async (convId: string): Promise<Message[]> => {
+  const getMessages = useCallback(async (convId: string, opts: { limit?: number; before?: number } = {}): Promise<Message[]> => {
     try {
-      const detail = await api.getConversation(convId)
+      const detail = await api.getConversation(convId, { limit: opts.limit ?? 30, before: opts.before })
       return (detail?.messages || []) as Message[]
     } catch {
       return []
     }
   }, [])
 
+  const getMessagesPage = useCallback(async (convId: string, opts: { limit?: number; before?: number } = {}) => {
+    const detail = await api.getConversation(convId, { limit: opts.limit ?? 30, before: opts.before })
+    return { messages: (detail?.messages || []) as Message[], hasMore: !!detail?.hasMore, oldestPosition: detail?.oldestPosition ?? null, total: detail?.total ?? 0 }
+  }, [])
+
+  const appendMessages = useCallback(async (convId: string, msgs: Message[]) => {
+    const payload = msgs.map((m) => ({
+      role: m.role,
+      content: m.content,
+      reasoning: m.reasoning,
+      attachments: m.attachments,
+      model: m.model,
+      usage: m.usage,
+      finish_reason: m.finish_reason,
+      durationMs: m.durationMs,
+    }))
+    await api.appendMessages(convId, payload)
+  }, [])
+
   return (
-    <ChatHistoryContext.Provider value={{ conversations, activeId, setActiveId, save, remove, getMessages, refresh }}>
+    <ChatHistoryContext.Provider value={{ conversations, activeId, setActiveId, save, remove, getMessages, getMessagesPage, appendMessages, refresh }}>
       {children}
     </ChatHistoryContext.Provider>
   )
