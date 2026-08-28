@@ -57,6 +57,33 @@ services:
         limits:
           memory: 512M
 
+  go-gateway:
+    build:
+      context: ../go-gateway
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8080"
+    env_file:
+      - .env
+    environment:
+      BACKEND_URL: http://backend:8000
+      SGLANG_URL: ${SGLANG_URL:-http://host.docker.internal:30000}
+      DASHBOARD_URL: ${DASHBOARD_URL:-https://chat.khain.app}
+      RATE_LIMIT_PER_MINUTE: ${RATE_LIMIT_PER_MINUTE:-60}
+      GO_GATEWAY_PORT: "8080"
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
   web:
     build:
       context: ..
@@ -67,6 +94,7 @@ services:
       - "443:443"
     depends_on:
       - backend
+      - go-gateway
     env_file:
       - .env
     environment:

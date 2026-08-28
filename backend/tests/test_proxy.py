@@ -725,17 +725,17 @@ def test_free_user_can_use_ox_alpha(client, api_key, monkeypatch):
 
 
 def test_openrouter_requires_key(client, api_key, monkeypatch):
-    """stealth/ox-alpha without an OpenRouter key fails with a clear 503."""
+    """glm-5.3-flash (alias stealth/ox-alpha) without Z.AI key fails with 503."""
     from backend.config import settings
 
-    monkeypatch.setattr(settings, "openrouter_api_key", "")
+    monkeypatch.setattr(settings, "z_api_key", "")
     r = client.post(
         "/v1/chat/completions",
-        json={"model": "stealth/ox-alpha", "messages": [{"role": "user", "content": "hi"}]},
+        json={"model": "glm-5.3-flash", "messages": [{"role": "user", "content": "hi"}]},
         headers={"Authorization": f"Bearer {api_key}"},
     )
     assert r.status_code == 503
-    assert "OPENROUTER_API_KEY" in r.text
+    assert "Z_API_KEY" in r.text
 
 
 def test_openrouter_body_forces_reasoning_when_disabled():
@@ -760,10 +760,11 @@ def test_openrouter_body_forces_reasoning_when_disabled():
 
 
 def test_openrouter_routes_to_openrouter(client, api_key, monkeypatch):
-    """stealth/ox-alpha is proxied to the OpenRouter endpoint."""
+    """glm-5.3-flash is proxied to Z.AI endpoint (alias stealth/ox-alpha still works)."""
     from backend.config import settings
 
-    monkeypatch.setattr(settings, "openrouter_api_key", "test-key")
+    monkeypatch.setattr(settings, "z_api_key", "test-key")
+    monkeypatch.setattr(settings, "z_ai_url", "https://api.z.ai/api/paas/v4")
 
     captured = {}
 
@@ -826,8 +827,8 @@ def test_openrouter_routes_to_openrouter(client, api_key, monkeypatch):
         r.httpx.AsyncClient = orig_http
 
     assert captured["url"].endswith("/chat/completions")
-    assert "openrouter.ai" in captured["url"]
-    assert captured["body"]["model"] == "stealth/ox-alpha"
+    assert "z.ai" in captured["url"]
+    assert captured["body"]["model"] in ("glm-5.3-flash", "stealth/ox-alpha")
     assert resp.status_code == 200
 
 
@@ -1516,8 +1517,10 @@ def test_models_free_user_sees_only_free_tier(client, session_token):
     assert r.status_code == 200
     ids = [m["id"] for m in r.json()["data"]]
     assert "deepseek-v4-flash" in ids
-    assert "stealth/ox-alpha" in ids
+    assert "glm-4.7-flash" in ids
+    assert "glm-4.5-flash" in ids
     assert "deepseek-v4-pro" not in ids
+    assert "glm-5.3-flash" not in ids
     assert "deepseek-v4-flash-vision-exp" not in ids
 
 

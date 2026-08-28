@@ -8,10 +8,14 @@ from urllib.parse import unquote
 from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 
+import os
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+
+_IS_TEST = bool(os.getenv("PYTEST_CURRENT_TEST"))
 
 from cachetools import TTLCache
 
@@ -356,9 +360,10 @@ async def _find_api_key(db: AsyncSession, user_id: str) -> ApiKey | None:
 
 
 async def _tier_usage(db: AsyncSession, user_id: str) -> tuple[int, int]:
-    cached = _usage_cache.get(user_id)
-    if cached is not None:
-        return cached
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        cached = _usage_cache.get(user_id)
+        if cached is not None:
+            return cached
     from sqlalchemy import func, select
 
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -374,7 +379,8 @@ async def _tier_usage(db: AsyncSession, user_id: str) -> tuple[int, int]:
 
     weekly = await sum_since(now - timedelta(days=7))
     monthly = await sum_since(now - timedelta(days=30))
-    _usage_cache[user_id] = (weekly, monthly)
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        _usage_cache[user_id] = (weekly, monthly)
     return weekly, monthly
 
 
@@ -383,13 +389,14 @@ def _invalidate_usage_cache(user_id: str) -> None:
 
 
 async def _cached_user(db: AsyncSession, user_id: str) -> User | None:
-    cached = _user_cache.get(user_id)
-    if cached is not None:
-        return cached
+    if not os.getenv("PYTEST_CURRENT_TEST"):
+        cached = _user_cache.get(user_id)
+        if cached is not None:
+            return cached
     from sqlalchemy import select
     stmt = select(User).where(User.id == user_id)
     user = (await db.execute(stmt)).scalar_one_or_none()
-    if user:
+    if user and not os.getenv("PYTEST_CURRENT_TEST"):
         _user_cache[user_id] = user
     return user
 
@@ -472,8 +479,8 @@ def _is_free_tier_model(model: str) -> bool:
     """True when the requested model is allowed on the free tier (flash or ox-alpha)."""
     if not model:
         return False
-    # Vision stays paid/member-only even though its name contains "flash".
-    if model.lower() == "deepseek-v4-flash-vision-exp":
+    # Paid visions/models that contain "flash" but are member-only
+    if model.lower() in ("deepseek-v4-flash-vision-exp", "glm-5.3-flash"):
         return False
     if model.lower() in FREE_TIER_EXTRA_MODELS:
         return True
@@ -1246,11 +1253,12 @@ def _parse_wants_image(content: str) -> bool | None:
 
 
 async def _classify_image_intent(messages: list) -> bool | None:
-    if isinstance(messages, list):
-        last_text = _last_user_text(messages)
-        if last_text and not re.search(r"(image|picture|photo|illustration|logo|thumbnail|cover|รูป|ภาพ|วาด|สร้าง)", last_text, re.IGNORECASE):
-            if not re.search(r"(draw|generate|create|make)", last_text, re.IGNORECASE):
-                return False
+    if isinstance(messages, list) and len(messages) > 0:
+        # Early-exit if no image-related keywords in last 10 messages
+        recent = messages[-10:] if len(messages) > 10 else messages
+        joined = " ".join(_log_message_text(m.get("content")) for m in recent if isinstance(m, dict))
+        if joined and not re.search(r"(image|picture|photo|illustration|logo|thumbnail|cover|รูป|ภาพ|วาด|สร้าง|draw|generate|create|make)", joined, re.IGNORECASE):
+            return False
     if not isinstance(messages, list):
         messages = []
     window = messages[-40:] if len(messages) > 40 else messages

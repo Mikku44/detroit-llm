@@ -33,6 +33,35 @@ from backend.db.models import Base, ConversationBase
 from backend.db.database import get_db, get_conversation_db
 from backend.auth.session import create_session_token
 
+@pytest.fixture(autouse=True)
+def _clear_caches():
+    # Clear in-process TTL caches that would otherwise leak between tests
+    try:
+        from backend.proxy.router import _usage_cache, _user_cache, _models_cache
+        _usage_cache.clear()
+        _user_cache.clear()
+        _models_cache.clear()
+    except Exception:
+        pass
+    try:
+        from backend.auth.middleware import _api_key_cache
+        _api_key_cache.clear()
+    except Exception:
+        pass
+    try:
+        from backend.admin.router import _status_cache
+        _status_cache.clear()
+    except Exception:
+        pass
+    yield
+    try:
+        from backend.proxy.router import _usage_cache, _user_cache, _models_cache
+        _usage_cache.clear()
+        _user_cache.clear()
+        _models_cache.clear()
+    except Exception:
+        pass
+
 TEST_DB_URL = os.environ["DATABASE_URL"]
 TEST_CONV_DB_URL = os.environ["CONVERSATIONS_DB_URL"]
 DB_FILE = _DB_FILE

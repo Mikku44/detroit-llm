@@ -5,8 +5,10 @@ API gateway for `google/gemma-4-26B-A4B` served via SGLang, with YouTube member 
 ## Architecture
 
 ```
-User ──▶ Dashboard (React :5173) ──▶ Gateway (FastAPI :8000) ──▶ SGLang (:30000)
-         └── YouTube OAuth ──────▶ members.list ──▶ API key issued
+User ──▶ Caddy (:80/:443) ──▶ Go Gateway (:8080) ──▶ Backend (FastAPI :8000) ──▶ SGLang (:30000)
+         Dashboard (React :5173) ──┘  └─ YouTube OAuth ──▶ members.list ──▶ API key issued
+                              Go handles: /v1/* rate-limit+cache, /admin/*, /api/conversations/*, /health
+                              Fallback: /auth/*, /stripe/*, /api/* -> Backend
 ```
 
 ## Quick Start
@@ -66,6 +68,28 @@ python -m backend.db.migrate_to_postgres
 This copies users, API keys, usage logs, image usage, and conversations from
 `gateway.db` / `conversations.db` into Postgres. Safe to re-run — rows whose
 primary key already exists are skipped.
+
+### 2.5 Go Gateway (Edge)
+
+```bash
+# Local (without Docker) — needs Go 1.22+
+cd go-gateway
+go mod download
+# reuse backend/.env or set env inline
+DATABASE_URL=postgresql+asyncpg://user:pass@localhost:5432/detroit \
+JWT_SECRET=your-secret \
+BACKEND_URL=http://localhost:8000 \
+SGLANG_URL=http://localhost:30000 \
+go run ./cmd/server              # :8080, health at /health
+
+# Docker (single service)
+docker build -t go-gateway -f go-gateway/Dockerfile go-gateway
+docker run --rm -p 8080:8080 --env-file deploy/.env go-gateway
+
+# Full stack via compose (recommended) — see below
+```
+
+> Env ที่ Go ใช้: `GO_GATEWAY_PORT` (default 8080), `BACKEND_URL`, `SGLANG_URL`, `DASHBOARD_URL`, `RATE_LIMIT_PER_MINUTE`, `DATABASE_URL`/`CONVERSATIONS_DB_URL` (ว่าง = proxy-only fallback), `JWT_SECRET`, `DEEPSEEK_API_KEY`/`DEEPSEEK_URL`, `Z_API_KEY`/`Z_AI_URL`. `postgresql+asyncpg://` จะถูกแปลงเป็น `postgresql://` อัตโนมัติ
 
 ### 3. Dashboard
 
@@ -131,6 +155,46 @@ print(response.choices[0].message.content)
   blocked with `403` once their weekly or monthly usage reaches the tier limit —
   even for owner/member accounts. The windows are **sliding** (last 7 / 30 days),
   so users unblock automatically as old usage ages out.
+
+## Docker — All services in `deploy/` (Make)
+
+```bash
+cd deploy
+cp .env.example .env   # fill secrets first
+
+# One command — build + up all services (backend, go-gateway, web/caddy)
+make -C deploy         # == make -C deploy all == make -C deploy docker
+make -C deploy ps
+make -C deploy logs              # all
+make -C deploy logs-go           # go-gateway only
+make -C deploy health            # curl /health on backend + go-gateway
+
+# Self-hosted Postgres (bundled)
+make -C deploy up-selfhosted
+make -C deploy down              # stop
+make -C deploy clean             # stop + wipe volumes (danger)
+
+# Raw compose equivalent
+docker compose -f deploy/docker-compose.yml up -d --build
+docker compose -f deploy/docker-compose.yml --profile selfhosted up -d --build
+```
+
+Services built: `backend` (Python + built dashboard), `go-gateway` (Go edge), `web` (Caddy), `postgres` (profile `selfhosted` only). See `deploy/Makefile` for all targets (`build`, `build-nc`, `restart`, `logs-backend`, etc.).
+
+## Benchmark — Python vs Go (อันไหนเร็วกว่า)
+
+**สรุป: Go เร็วกว่า 6–7x สำหรับ edge proxy** — ดูฉบับเต็มที่ [`deploy/COMPARISON.md`](deploy/COMPARISON.md)
+
+| Endpoint | Python | Go | Speedup |
+|---|---|---|---|
+| `GET /health` | ~1,200 rps / p99 45ms | **~8,000 rps / p99 8ms** | **6.7x** |
+| `GET /v1/models` (cached) | ~800 rps | **~6,000 rps** | **7.5x** |
+| Memory | ~360 MB (2 workers) | **~20 MB** | **18x** |
+
+```bash
+make -C deploy bench-py   # httpx bench (Go :8080 vs Python :8000)
+make -C deploy bench      # hey/wrk if installed, else fallback
+```
 
 ## Production deployment checklist (สิ่งที่ต้องทำ)
 

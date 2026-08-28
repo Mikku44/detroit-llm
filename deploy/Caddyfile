@@ -6,20 +6,40 @@
 	encode gzip
 	root * /srv
 
-	# API / auth / health -> FastAPI backend
+	# Go edge gateway (Tier A+B) — rate limit, models cache, admin read, streaming passthrough
 	handle /v1/* {
-		reverse_proxy backend:8000
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+			lb_try_interval 100ms
+		}
+	}
+	handle /health {
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+		}
+	}
+	handle /admin/* {
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+			lb_try_interval 100ms
+		}
+	}
+	handle / {
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+		}
+	}
+
+	# Go handles conversations read directly (pg-only); others fallback
+	handle /api/conversations* {
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+		}
 	}
 	handle /api/* {
 		reverse_proxy backend:8000
 	}
-	handle /admin/* {
-		reverse_proxy backend:8000
-	}
 	handle /auth/* {
-		reverse_proxy backend:8000
-	}
-	handle /health {
 		reverse_proxy backend:8000
 	}
 	handle /stripe/* {
