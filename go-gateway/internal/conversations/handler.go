@@ -1,7 +1,6 @@
 package conversations
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
