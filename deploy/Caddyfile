@@ -24,14 +24,14 @@
 			lb_try_interval 100ms
 		}
 	}
-	handle / {
+
+	# Go handles conversations read directly (pg-only) + web chat image_gen injection
+	handle /api/conversations* {
 		reverse_proxy go-gateway:8080 {
 			lb_try_duration 2s
 		}
 	}
-
-	# Go handles conversations read directly (pg-only); others fallback
-	handle /api/conversations* {
+	handle /api/web/* {
 		reverse_proxy go-gateway:8080 {
 			lb_try_duration 2s
 		}
