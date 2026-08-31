@@ -10,6 +10,7 @@ import Chat from './pages/Chat'
 import Layout from './components/Layout'
 import Chat3 from './pages/Chat3'
 import Docs from './pages/Docs'
+import Models from './pages/Models'
 import AdminSystem from './pages/AdminSystem'
 import Console from './pages/Console'
 import NotFound from './pages/NotFound'
@@ -19,6 +20,14 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   if (loading) return <div className="flex h-screen items-center justify-center text-zinc-500">Loading...</div>
   if (!user) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
+
+function OwnerRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) return <div className="flex h-screen items-center justify-center text-zinc-500">Loading...</div>
+  if (!user) return <Navigate to="/login" replace />
+  if (!user.is_owner) return <Navigate to="/" replace />
   return <>{children}</>
 }
 
@@ -37,8 +46,9 @@ export default function App() {
           {/* <Route path="chatv2" element={<ChatV2 />} /> */}
           <Route path="chat/:id?" element={<Chat3 />} />
           <Route path="docs" element={<Docs />} />
+          <Route path="models" element={<Models />} />
           <Route path="admin" element={<AdminSystem />} />
-          <Route path="console" element={<Console />} />
+          <Route path="console" element={<OwnerRoute><Console /></OwnerRoute>} />
           <Route path="*" element={<NotFound />} />
         </Route>
         <Route path="*" element={<NotFound />} />

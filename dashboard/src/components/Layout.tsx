@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { useIsMobile } from '../hooks/use-mobile'
 import { LogOut, Key, BarChart3, LayoutDashboard, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard, Cookie, Users, CreditCard } from 'lucide-react'
-import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat, HiOutlineShieldCheck, HiOutlineTerminal } from 'react-icons/hi'
+import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat, HiOutlineShieldCheck, HiOutlineTerminal, HiOutlineCube } from 'react-icons/hi'
 import { ChatHistoryProvider, useChatHistory } from '../lib/chat-history'
 import Avatar from './Avatar'
 import UpgradeDialog from './UpgradeDialog'
@@ -61,11 +61,12 @@ const links = [
   { to: '/keys', label: 'API Keys', icon: HiOutlineKey },
   { to: '/usage', label: 'Usage', icon: HiOutlineChartBar },
   { to: '/docs', label: 'Docs', icon: HiOutlineBookOpen },
-  { to: '/console', label: 'Console', icon: HiOutlineTerminal },
+  { to: '/models', label: 'Models', icon: HiOutlineCube },
 ]
 
 const adminLinks = [
   { to: '/admin', label: 'System', icon: HiOutlineShieldCheck },
+  { to: '/console', label: 'Console', icon: HiOutlineTerminal },
 ]
 
 const TIER_NAMES: Record<string, string> = {
