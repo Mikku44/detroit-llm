@@ -53,14 +53,17 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
   const refresh = useCallback(async () => {
     try {
       const d = await api.listConversations()
+      if (import.meta.env.DEV) console.log('[DEV history] listConversations', d)
       const convs = ((d?.conversations || []) as Array<{ id: string; title?: string; updated_at?: string }>)
         .map((c) => ({
           id: c.id,
           title: c.title || 'New Chat',
           updatedAt: c.updated_at ? new Date(c.updated_at).getTime() : Date.now(),
         }))
+      if (import.meta.env.DEV) console.log('[DEV history] parsed', convs)
       setConversations(convs)
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.log('[DEV history] listConversations failed', e)
       setConversations([])
     }
   }, [])
@@ -121,18 +124,22 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
   const getMessages = useCallback(async (convId: string, opts: { limit?: number; before?: number } = {}): Promise<Message[]> => {
     try {
       const detail = await api.getConversation(convId, { limit: opts.limit ?? 30, before: opts.before })
+      if (import.meta.env.DEV) console.log('[DEV history] getMessages detail', { convId, opts, detail })
       return (detail?.messages || []) as Message[]
-    } catch {
+    } catch (e) {
+      if (import.meta.env.DEV) console.log('[DEV history] getMessages failed', { convId, e })
       return []
     }
   }, [])
 
   const getMessagesPage = useCallback(async (convId: string, opts: { limit?: number; before?: number } = {}) => {
     const detail = await api.getConversation(convId, { limit: opts.limit ?? 30, before: opts.before })
+    if (import.meta.env.DEV) console.log('[DEV history] getConversation detail', { convId, opts, detail })
     return { messages: (detail?.messages || []) as Message[], hasMore: !!detail?.hasMore, oldestPosition: detail?.oldestPosition ?? null, total: detail?.total ?? 0 }
   }, [])
 
   const appendMessages = useCallback(async (convId: string, msgs: Message[]) => {
+    if (import.meta.env.DEV) console.log('[DEV history] appendMessages', { convId, msgs })
     const payload = msgs.map((m) => ({
       role: m.role,
       content: m.content,
@@ -144,6 +151,7 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
       durationMs: m.durationMs,
     }))
     const res = await api.appendMessages(convId, payload)
+    if (import.meta.env.DEV) console.log('[DEV history] appendMessages res', res)
     return res?.messages as Message[] | undefined
   }, [])
 

@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     r2_region: str = "auto"
     r2_access_key_id: str = ""
     r2_secret_access_key: str = ""
+    r2_public_url: str = ""
 
     stripe_api_key: str = ""
     stripe_webhook_secret: str = ""

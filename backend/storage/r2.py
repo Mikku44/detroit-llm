@@ -30,7 +30,11 @@ def _get_client():
     return _client
 
 def _public_url(key: str) -> str:
+    if settings.r2_public_url:
+        return f"{settings.r2_public_url.rstrip('/')}/{key}"
     ep = settings.r2_endpoint.rstrip("/")
+    if "r2.cloudflarestorage.com" in ep:
+        return f"https://pub-4525550bd32f4b509a573a3e3f66516f.r2.dev/{key}"
     return f"{ep}/{settings.r2_bucket_name}/{key}"
 
 def _ext_for_content_type(ct: str) -> str:
@@ -78,10 +82,15 @@ def delete_by_url(url: str) -> bool:
     try:
         ep = settings.r2_endpoint.rstrip("/")
         bucket = settings.r2_bucket_name
+        pub = (settings.r2_public_url or "https://pub-4525550bd32f4b509a573a3e3f66516f.r2.dev").rstrip("/")
         if url.startswith(f"{ep}/{bucket}/"):
             key = url[len(f"{ep}/{bucket}/"):]
+        elif url.startswith(f"{pub}/"):
+            key = url[len(f"{pub}/"):]
         elif bucket in url:
             key = url.split(bucket + "/")[-1].split("?")[0]
+        elif "r2.dev" in url:
+            key = url.split("r2.dev/")[-1].split("?")[0]
         else:
             return False
         client = _get_client()

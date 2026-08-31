@@ -441,6 +441,10 @@ export default function Chat3() {
   }, [id, activeId])
 
   useEffect(() => {
+    if (import.meta.env.DEV) console.log('[DEV /chat/:id]', { id: id ?? null, activeId, historyLoaded, messagesCount: messages.length, messages })
+  }, [id, activeId, historyLoaded, messages])
+
+  useEffect(() => {
     if (!activeId) setHistoryLoaded(true)
   }, [activeId])
 
@@ -458,15 +462,20 @@ export default function Chat3() {
     setMessages([])
     setHasMore(true)
     setOldestPos(null)
+    if (import.meta.env.DEV) console.log('[DEV /chat/:id] loading conversation', activeId)
     getMessagesPage(activeId, { limit: 30 })
-      .then(({ messages: msgs, hasMore: hm, oldestPosition }) => {
+      .then(({ messages: msgs, hasMore: hm, oldestPosition, total }) => {
         if (cancelled) return
+        if (import.meta.env.DEV) console.log('[DEV /chat/:id] conversation detail', { convId: activeId, count: msgs.length, hasMore: hm, oldestPosition, total, messages: msgs })
         setMessages(msgs)
         setHasMore(hm)
         setOldestPos(oldestPosition)
         setHistoryLoaded(true)
       })
-      .catch(() => setHistoryLoaded(true))
+      .catch((e) => {
+        if (import.meta.env.DEV) console.log('[DEV /chat/:id] conversation load failed', activeId, e)
+        setHistoryLoaded(true)
+      })
     return () => {
       cancelled = true
     }
