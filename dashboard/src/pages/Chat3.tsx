@@ -673,7 +673,8 @@ export default function Chat3() {
         ? model
         : 'deepseek-v4-flash'
       : model
-    const upstreamModel = hasMedia ? 'gemini-2.5-flash' : requestModel
+    const NATIVE_VISION_MODELS = new Set(['deepseek-v4-flash-vision-exp', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-4.5-air', 'glm-4.7-flashx', 'gemini-2.5-flash'])
+    const upstreamModel = hasMedia && !NATIVE_VISION_MODELS.has(requestModel) ? 'gemini-2.5-flash' : requestModel
     setMessages((m) => [...m, { role: 'user', content: text, attachments, model: requestModel }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
     setBusy(true)
     setIsVision(hasMedia)
