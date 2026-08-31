@@ -24,6 +24,7 @@ interface Attachment {
 }
 
 interface Msg {
+  id?: string
   role: 'user' | 'assistant'
   content: string
   reasoning?: string
@@ -34,6 +35,10 @@ interface Msg {
   durationMs?: number
   finish_reason?: string | null
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  reaction?: 'like' | 'dislike' | null
+  like_count?: number
+  dislike_count?: number
+  position?: number
 }
 
 interface SseMeta {
@@ -55,9 +60,8 @@ const ALLOWED_CHAT_MODELS = new Set([
   'qwen3.7-flash',
   'z-image-turbo',
   'glm-5.3-flash',
-  'glm-4.7-flash',
-  'glm-4.5-flash',
-  'glm-4.6v-flash',
+  'glm-4.5-air',
+  'glm-4.7-flashx',
 ])
 
 const MODEL_META: Record<string, ModelMeta> = {
@@ -91,20 +95,15 @@ const MODEL_META: Record<string, ModelMeta> = {
     desc: 'Text + Image + Video — Z.AI fast reasoning (replaces Ox-Alpha)',
     badges: ['text', 'image', 'video', 'reasoning'],
   },
-  'glm-4.7-flash': {
-    name: 'GLM-4.7-Flash',
-    desc: 'Text + Image + Video — Z.AI',
+  'glm-4.5-air': {
+    name: 'GLM-4.5-Air',
+    desc: 'Text + Image + Video — Z.AI lightweight reasoning',
     badges: ['text', 'image', 'video', 'reasoning'],
   },
-  'glm-4.5-flash': {
-    name: 'GLM-4.5-Flash',
-    desc: 'Text + Image + Video — Z.AI',
+  'glm-4.7-flashx': {
+    name: 'GLM-4.7-FlashX',
+    desc: 'Text + Image + Video — Z.AI high-speed reasoning',
     badges: ['text', 'image', 'video', 'reasoning'],
-  },
-  'glm-4.6v-flash': {
-    name: 'GLM-4.6V-Flash',
-    desc: 'Text + Image + Video — Z.AI vision',
-    badges: ['text', 'image', 'video', 'vision'],
   },
   'gemini-2.5-flash': {
     name: 'Gemini 2.5 Flash',
@@ -136,9 +135,8 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'qwen3.7-flash': 1000000,
   'z-image-turbo': 1000000,
   'glm-5.3-flash': 1000000,
-  'glm-4.7-flash': 1000000,
-  'glm-4.5-flash': 1000000,
-  'glm-4.6v-flash': 1000000,
+  'glm-4.5-air': 1000000,
+  'glm-4.7-flashx': 1000000,
   'gemini-2.5-flash': 1000000,
 }
 
@@ -821,7 +819,18 @@ export default function Chat3() {
         const isErr = _logAcc.includes('⚠️') || /\[13\d{2,3}\]/.test(_logAcc)
         const userMsg: Msg = { role: 'user', content: text, attachments, model: requestModel }
         const asstMsg: Msg = { role: 'assistant', content: _logAcc, model: _respModel, usage: _usage, finish_reason: _finishReason, ...(isErr ? { error: true } : {}) }
-        if (activeId) appendMessages(activeId, [userMsg, asstMsg]).catch(() => {})
+        if (activeId) (appendMessages(activeId, [userMsg, asstMsg]) as Promise<any>).then((inserted: any) => {
+          const arr = inserted as any[] | undefined
+          if (arr?.length === 2) {
+            setMessages((prev) => {
+              const copy = [...prev]
+              const start = copy.length - 2
+              if (start >= 0 && arr[0]?.id) copy[start] = { ...copy[start], id: arr[0].id }
+              if (copy.length - 1 >= 0 && arr[1]?.id) copy[copy.length - 1] = { ...copy[copy.length - 1], id: arr[1].id }
+              return copy
+            })
+          }
+        }).catch(() => {})
         else {
           const toSave = [...messages, userMsg, asstMsg]
           saveConversation(null, toSave, model || undefined).then((newId) => {
@@ -875,6 +884,34 @@ export default function Chat3() {
     navigator.clipboard.writeText(content)
     setCopied(content)
     setTimeout(() => setCopied(null), 1500)
+  }
+
+  const reactMsg = async (idx: number, reaction: 'like' | 'dislike') => {
+    const msg = messages[idx]
+    if (!msg || msg.role !== 'assistant') return
+    const convId = activeId
+    const msgId = msg.id
+    const next: 'like' | 'dislike' | null = msg.reaction === reaction ? null : reaction
+    setMessages((prev) => {
+      const copy = [...prev]
+      copy[idx] = { ...copy[idx], reaction: next }
+      return copy
+    })
+    if (!convId || !msgId) return
+    try {
+      const res = await api.reactMessage(convId, msgId, next)
+      setMessages((prev) => {
+        const copy = [...prev]
+        if (copy[idx]?.id === msgId) copy[idx] = { ...copy[idx], reaction: res.reaction ?? null }
+        return copy
+      })
+    } catch {
+      setMessages((prev) => {
+        const copy = [...prev]
+        if (copy[idx]?.id === msgId) copy[idx] = { ...copy[idx], reaction: msg.reaction ?? null }
+        return copy
+      })
+    }
   }
 
   const clearChat = () => {
@@ -1167,16 +1204,20 @@ export default function Chat3() {
                         {copied === m.content ? <FiCheck className="text-green-500" /> : <FiCopy size={15} />}
                       </button>
                       <button
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
-                        title="Good response"
+                        onClick={() => reactMsg(i, 'like')}
+                        disabled={!activeId || !m.id}
+                        className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-40 ${m.reaction === 'like' ? 'bg-zinc-800 text-green-500' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'}`}
+                        title={m.id ? 'Good response' : 'Save conversation to react'}
                       >
-                        <FiThumbsUp size={14} />
+                        <FiThumbsUp size={14} className={m.reaction === 'like' ? 'fill-current' : ''} />
                       </button>
                       <button
-                        className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 transition-colors"
-                        title="Bad response"
+                        onClick={() => reactMsg(i, 'dislike')}
+                        disabled={!activeId || !m.id}
+                        className={`flex h-8 w-8 items-center justify-center rounded-lg transition-colors disabled:opacity-40 ${m.reaction === 'dislike' ? 'bg-zinc-800 text-red-500' : 'text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'}`}
+                        title={m.id ? 'Bad response' : 'Save conversation to react'}
                       >
-                        <FiThumbsDown size={14} />
+                        <FiThumbsDown size={14} className={m.reaction === 'dislike' ? 'fill-current' : ''} />
                       </button>
                     </div>
                   )}

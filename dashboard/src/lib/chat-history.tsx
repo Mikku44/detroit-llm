@@ -13,6 +13,10 @@ export type Message = {
   durationMs?: number
   finish_reason?: string | null
   usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number }
+  reaction?: 'like' | 'dislike' | null
+  like_count?: number
+  dislike_count?: number
+  position?: number
 }
 
 export type Conversation = {
@@ -29,7 +33,7 @@ type ChatHistoryContextType = {
   remove: (convId: string) => Promise<void>
   getMessages: (convId: string, opts?: { limit?: number; before?: number }) => Promise<Message[]>
   getMessagesPage: (convId: string, opts?: { limit?: number; before?: number }) => Promise<{ messages: Message[]; hasMore: boolean; oldestPosition: number | null; total: number }>
-  appendMessages: (convId: string, msgs: Message[]) => Promise<void>
+  appendMessages: (convId: string, msgs: Message[]) => Promise<Message[] | undefined>
   refresh: () => Promise<void>
 }
 
@@ -139,7 +143,8 @@ export function ChatHistoryProvider({ children }: { children: ReactNode }) {
       finish_reason: m.finish_reason,
       durationMs: m.durationMs,
     }))
-    await api.appendMessages(convId, payload)
+    const res = await api.appendMessages(convId, payload)
+    return res?.messages as Message[] | undefined
   }, [])
 
   return (

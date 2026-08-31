@@ -1517,8 +1517,8 @@ def test_models_free_user_sees_only_free_tier(client, session_token):
     assert r.status_code == 200
     ids = [m["id"] for m in r.json()["data"]]
     assert "deepseek-v4-flash" in ids
-    assert "glm-4.7-flash" in ids
-    assert "glm-4.5-flash" in ids
+    assert "glm-4.5-air" in ids
+    assert "glm-4.7-flashx" in ids
     assert "deepseek-v4-pro" not in ids
     assert "glm-5.3-flash" not in ids
     assert "deepseek-v4-flash-vision-exp" not in ids

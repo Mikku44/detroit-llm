@@ -97,6 +97,7 @@ export const api = {
   createConversation: (data: any) => request('/api/conversations', { method: 'POST', body: JSON.stringify(data) }),
   updateConversation: (id: string, data: any) => request(`/api/conversations/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteConversation: (id: string) => request(`/api/conversations/${id}`, { method: 'DELETE' }),
+  reactMessage: (convId: string, messageId: string, reaction: 'like' | 'dislike' | null) => request(`/api/conversations/${convId}/messages/${messageId}/reaction`, { method: 'POST', body: JSON.stringify({ reaction }) }),
 
   loginUrl: () => `${BASE}/auth/youtube/login?redirect=dashboard`,
   userLoginUrl: () => `${BASE}/auth/youtube/login/user?redirect=dashboard`,

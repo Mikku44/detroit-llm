@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Integer, Boolean, DateTime, Text, ForeignKey, BigInteger
+from sqlalchemy import String, Integer, Boolean, DateTime, Text, ForeignKey, BigInteger, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.db.database import Base, ConversationBase
@@ -176,3 +176,20 @@ class ConversationMessage(ConversationBase):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+    likes: Mapped[list["MessageLike"]] = relationship(back_populates="message", cascade="all, delete-orphan")
+
+
+class MessageLike(ConversationBase):
+    __tablename__ = "message_likes"
+    __table_args__ = (UniqueConstraint("user_id", "message_id", name="uq_message_likes_user_message"),)
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    message_id: Mapped[str] = mapped_column(
+        String, ForeignKey("conversation_messages.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    reaction: Mapped[str] = mapped_column(String, nullable=False, default="like")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    message: Mapped["ConversationMessage"] = relationship(back_populates="likes")

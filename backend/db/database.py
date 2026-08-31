@@ -156,11 +156,13 @@ async def init_db():
             )
 
     async with conversations_engine.begin() as conn:
-        from backend.db.models import Conversation, ConversationMessage
+        from backend.db.models import Conversation, ConversationMessage, MessageLike
         await conn.run_sync(ConversationBase.metadata.create_all)
         try:
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_conv_messages_cid_pos ON conversation_messages (conversation_id, position)"))
             await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_conversations_user_updated ON conversations (user_id, updated_at DESC)"))
+            await conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_message_likes_user_message ON message_likes (user_id, message_id)"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_message_likes_message_id ON message_likes (message_id)"))
         except Exception:
             pass
         if settings.conversations_db_url.startswith("sqlite"):

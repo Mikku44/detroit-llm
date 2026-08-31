@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.auth.session import require_session
 from backend.db.database import get_conversation_db, get_db
-from backend.db.models import Conversation, ConversationMessage, User
+from backend.db.models import Conversation, ConversationMessage, MessageLike, User
 from backend.chat.crypto import chat_date_of, decrypt_text, derive_key, encrypt_text
 
 router = APIRouter()
@@ -19,13 +19,13 @@ async def _user_is_paid(gw_db: AsyncSession, user_id: str) -> bool:
     return bool(user and (user.is_member or user.is_owner))
 
 
-def _msg_to_dict(m: ConversationMessage, key: bytes | None = None) -> dict:
+def _msg_to_dict(m: ConversationMessage, key: bytes | None = None, reaction: str | None = None, like_count: int = 0, dislike_count: int = 0) -> dict:
     content = m.content or ""
     reasoning = m.reasoning
     if m.encrypted and key:
         content = decrypt_text(key, content)
         reasoning = decrypt_text(key, reasoning) if reasoning else None
-    out: dict = {"role": m.role, "content": content, "position": m.position}
+    out: dict = {"id": m.id, "role": m.role, "content": content, "position": m.position}
     if reasoning:
         out["reasoning"] = reasoning
     if m.model:
@@ -44,7 +44,30 @@ def _msg_to_dict(m: ConversationMessage, key: bytes | None = None) -> dict:
         out["finish_reason"] = m.finish_reason
     if m.duration_ms is not None:
         out["durationMs"] = m.duration_ms
+    if reaction is not None:
+        out["reaction"] = reaction
+    if like_count:
+        out["like_count"] = like_count
+    if dislike_count:
+        out["dislike_count"] = dislike_count
     return out
+
+
+async def _reactions_for_messages(db: AsyncSession, user_id: str, message_ids: list[str]) -> dict:
+    if not message_ids:
+        return {}
+    rows = (await db.execute(select(MessageLike).where(MessageLike.message_id.in_(message_ids)))).scalars().all()
+    counts: dict[str, dict] = {mid: {"like_count": 0, "dislike_count": 0, "reaction": None} for mid in message_ids}
+    for r in rows:
+        if r.message_id not in counts:
+            continue
+        if r.reaction == "like":
+            counts[r.message_id]["like_count"] += 1
+        elif r.reaction == "dislike":
+            counts[r.message_id]["dislike_count"] += 1
+        if r.user_id == user_id:
+            counts[r.message_id]["reaction"] = r.reaction
+    return counts
 
 
 def _maybe_upload_attachments(attachments):
@@ -205,6 +228,7 @@ async def get_conversation(
             else:
                 cnt_before = (await db.execute(select(func.count(ConversationMessage.id)).where(ConversationMessage.conversation_id == conversation_id, ConversationMessage.position < oldest))).scalar_one() or 0
                 has_more = cnt_before > 0
+    reactions = await _reactions_for_messages(db, user_id, [m.id for m in msgs]) if msgs else {}
     return JSONResponse(
         content={
             "id": conv.id,
@@ -212,7 +236,7 @@ async def get_conversation(
             "model": conv.model,
             "created_at": conv.created_at.isoformat() if conv.created_at else None,
             "updated_at": conv.updated_at.isoformat() if conv.updated_at else None,
-            "messages": [_msg_to_dict(m, key) for m in msgs],
+            "messages": [_msg_to_dict(m, key, reactions.get(m.id, {}).get("reaction"), reactions.get(m.id, {}).get("like_count", 0), reactions.get(m.id, {}).get("dislike_count", 0)) for m in msgs],
             "total": total,
             "hasMore": has_more,
             "oldestPosition": oldest,
@@ -344,6 +368,51 @@ async def update_conversation(
 
     await db.commit()
     return JSONResponse(content={"id": conv.id, "title": conv.title}, status_code=200)
+
+
+@router.post("/api/conversations/{conversation_id}/messages/{message_id}/reaction")
+async def react_message(
+    conversation_id: str,
+    message_id: str,
+    request: Request,
+    user_id: str = Depends(require_session),
+    db: AsyncSession = Depends(get_conversation_db),
+):
+    conv = (await db.execute(select(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == user_id))).scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    msg = (await db.execute(select(ConversationMessage).where(ConversationMessage.id == message_id, ConversationMessage.conversation_id == conversation_id))).scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Message not found")
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    reaction = (body.get("reaction") if isinstance(body, dict) else None)
+    if reaction is not None:
+        reaction = str(reaction).lower().strip()
+        if reaction not in ("like", "dislike"):
+            reaction = None
+    existing = (await db.execute(select(MessageLike).where(MessageLike.user_id == user_id, MessageLike.message_id == message_id))).scalar_one_or_none()
+    if reaction is None:
+        if existing:
+            await db.delete(existing)
+            await db.commit()
+        return JSONResponse(content={"reaction": None}, status_code=200)
+    if existing:
+        if existing.reaction == reaction:
+            await db.delete(existing)
+            await db.commit()
+            return JSONResponse(content={"reaction": None}, status_code=200)
+        existing.reaction = reaction
+        existing.updated_at = func.now()
+        await db.commit()
+        return JSONResponse(content={"reaction": reaction}, status_code=200)
+    like = MessageLike(user_id=user_id, message_id=message_id, reaction=reaction)
+    db.add(like)
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Already reacted")
+    return JSONResponse(content={"reaction": reaction}, status_code=200)
 
 
 @router.delete("/api/conversations/{conversation_id}")

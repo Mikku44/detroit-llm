@@ -464,7 +464,70 @@ FREE_MODEL_ONLY_MESSAGE = (
     "Upgrade to a paid membership for pro and other models."
 )
 
-FREE_TIER_EXTRA_MODELS = {"glm-4.7-flash", "glm-4.5-flash", "glm-4.6v-flash"}
+FREE_TIER_EXTRA_MODELS = {"glm-4.5-air", "glm-4.7-flashx"}
+
+MODEL_TOKEN_LIMITS: dict[str, tuple[int, int]] = {
+    "glm-5.3": (65536, 131072),
+    "glm-5.3-flash": (65536, 131072),
+    "glm-5.2": (65536, 131072),
+    "glm-5.1": (65536, 131072),
+    "glm-5": (65536, 131072),
+    "glm-4.7": (65536, 131072),
+    "glm-4.7-flashx": (65536, 131072),
+    "glm-4.6": (65536, 131072),
+    "glm-4.6v": (16384, 32768),
+    "glm-4.6v-flash": (16384, 32768),
+    "glm-4.6v-flashx": (16384, 32768),
+    "glm-4.5": (65536, 98304),
+    "glm-4.5-air": (65536, 98304),
+    "glm-4.5-x": (65536, 98304),
+    "glm-4.5-airx": (65536, 98304),
+    "glm-4.5-flash": (65536, 98304),
+    "glm-4.5v": (16384, 16384),
+    "glm-4-32b-0414-128k": (16384, 16384),
+}
+
+
+def _model_token_limits(model: str) -> tuple[int, int] | None:
+    if not model:
+        return None
+    return MODEL_TOKEN_LIMITS.get(model.lower())
+
+
+def _apply_max_tokens(body: dict, model: str) -> None:
+    limits = _model_token_limits(model)
+    if limits is None:
+        if not body.get("max_tokens"):
+            body["max_tokens"] = 4096
+        return
+    default, maximum = limits
+    requested = body.get("max_tokens")
+    if not requested:
+        body["max_tokens"] = default
+    else:
+        try:
+            v = int(requested)
+        except Exception:
+            body["max_tokens"] = default
+            return
+        body["max_tokens"] = min(max(1, v), maximum)
+
+
+def _apply_max_output_tokens(body: dict, model: str) -> None:
+    limits = _model_token_limits(model)
+    if limits is None:
+        return
+    default, maximum = limits
+    key = "max_output_tokens" if "max_output_tokens" in body else "max_tokens" if "max_tokens" in body else None
+    if key is None:
+        body["max_output_tokens"] = default
+        return
+    try:
+        v = int(body[key])
+    except Exception:
+        body[key] = default
+        return
+    body[key] = min(max(1, v), maximum)
 
 
 def _is_flash_model(model: str) -> bool:
@@ -2162,9 +2225,7 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
     fallback_prompt_tokens = count_messages_tokens(body.get("messages") or [])
     created_time = int(time.time())
 
-    # Cap generation length so a misbehaving model can't run away forever.
-    if not body.get("max_tokens"):
-        body["max_tokens"] = 4096
+    _apply_max_tokens(body, model)
 
     # Custom gateway flags — pop them so they never reach an upstream provider.
     image_gen = bool(body.get("image_gen"))
@@ -2484,6 +2545,7 @@ async def responses_api(
     if not isinstance(body, dict) or not body:
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
     model = await _free_model_gate(db, user_id, body)
+    _apply_max_output_tokens(body, model)
     is_stream = body.get("stream", False)
     fallback_prompt_tokens = count_responses_input_tokens(body.get("input") or "")
 
@@ -2611,13 +2673,15 @@ def _image_engine_model(model: str) -> str:
 def _anthropic_chat_payload(body: dict) -> dict:
     """Build an OpenAI chat-completions payload from an Anthropic Messages request."""
     messages = _anthropic_to_chat_messages(body)
+    model = _resolve_model(body.get("model", "deepseek-v4-pro"))
     payload: dict = {
-        "model": _resolve_model(body.get("model", "deepseek-v4-pro")),
+        "model": model,
         "messages": messages,
         "stream": bool(body.get("stream", False)),
     }
     if body.get("max_tokens"):
         payload["max_tokens"] = body["max_tokens"]
+        _apply_max_tokens(payload, model)
     if body.get("temperature") is not None:
         payload["temperature"] = body["temperature"]
     if body.get("top_p") is not None:
@@ -3639,20 +3703,14 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
         {
             "object": "model",
             "type": "model",
-            "id": "glm-4.7-flash",
-            "display_name": "glm-4.7-flash (Z.AI)",
+            "id": "glm-4.5-air",
+            "display_name": "glm-4.5-air (Z.AI)",
         },
         {
             "object": "model",
             "type": "model",
-            "id": "glm-4.5-flash",
-            "display_name": "glm-4.5-flash (Z.AI)",
-        },
-        {
-            "object": "model",
-            "type": "model",
-            "id": "glm-4.6v-flash",
-            "display_name": "glm-4.6v-flash (Z.AI)",
+            "id": "glm-4.7-flashx",
+            "display_name": "glm-4.7-flashx (Z.AI)",
         },
         {
             "object": "model",

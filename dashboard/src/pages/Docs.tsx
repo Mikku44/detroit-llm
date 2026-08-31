@@ -276,6 +276,7 @@ export default function Docs() {
   const [copied, setCopied] = useState(false);
   const [copiedModel, setCopiedModel] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL);
 
   useEffect(() => {
     api.listKeys().then((d) => {
@@ -285,7 +286,8 @@ export default function Docs() {
     }).catch(() => {})
   }, [])
 
-  const codeText = CODE[activeTab] || CODE['cURL'];
+  const rawCode = CODE[activeTab] || CODE['cURL'];
+  const codeText = rawCode.split(DEFAULT_MODEL).join(selectedModel);
   const displayCode = codeText.split(KEY_PLACEHOLDER).join(apiKey ?? '$DETROIT_API_KEY');
   const copyText =
     activeTab === 'cURL'
@@ -395,7 +397,7 @@ export default function Docs() {
                 lineHeight: '1.625',
               }}
               codeTagProps={{ style: { fontFamily: 'inherit' } }}
-              renderer={makeRenderer(apiKey ? [apiKey, DEFAULT_MODEL] : [DEFAULT_MODEL])}
+              renderer={makeRenderer(apiKey ? [apiKey, selectedModel] : [selectedModel])}
             >
               {displayCode}
             </SyntaxHighlighter>
@@ -538,7 +540,7 @@ export default function Docs() {
               desc: 'DeepSeek V4 Pro — the most capable model for complex reasoning, coding, and production workloads.',
               ctx: '1M context',
               size: '304B parameters',
-              highlight: true,
+              highlight: false,
             },
             {
               id: 'deepseek-v4-flash',
@@ -572,52 +574,31 @@ export default function Docs() {
               size: '—',
               highlight: false,
             },
-            {
-              id: 'glm-5.3-flash',
-              tag: 'Reasoning',
-              desc: 'GLM-5.3-Flash (Z.AI) — fast reasoning model designed for coding, sustained agentic work, and production workloads',
-              ctx: '—',
-              size: '—',
-              highlight: false,
-            },
-            {
-              id: 'glm-4.7-flash',
-              tag: 'Reasoning',
-              desc: 'GLM-4.7-Flash (Z.AI) — balanced reasoning',
-              ctx: '—',
-              size: '—',
-              highlight: false,
-            },
-            {
-              id: 'glm-4.5-flash',
-              tag: 'Reasoning',
-              desc: 'GLM-4.5-Flash (Z.AI) — efficient reasoning',
-              ctx: '—',
-              size: '—',
-              highlight: false,
-            },
-            {
-              id: 'glm-4.6v-flash',
-              tag: 'Vision',
-              desc: 'GLM-4.6V-Flash (Z.AI) — vision reasoning',
-              ctx: '—',
-              size: '—',
-              highlight: false,
-            },
-          ].map((m) => (
+            { id: 'glm-5.3-flash', tag: 'Reasoning', desc: 'GLM-5.3-Flash (Z.AI) — 1M context / max 128K output (131,072)', ctx: '1M context', size: '128K max', highlight: false },
+            { id: 'glm-4.5-air', tag: 'Reasoning', desc: 'GLM-4.5-Air (Z.AI) — default 65,536 / max 98,304', ctx: '98K max', size: '65K default', highlight: false },
+            { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX (Z.AI) — default 65,536 / max 131,072', ctx: '131K max', size: '65K default', highlight: false },
+          ].map((m) => {
+            const isSelected = selectedModel === m.id
+            return (
             <div
               key={m.id}
-              className={`rounded-xl border p-5 transition-colors ${
-                m.highlight
-                  ? 'border-(--primary-color)/40 bg-(--primary-color)/10'
-                  : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-700'
+              onClick={() => setSelectedModel(m.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedModel(m.id) } }}
+              className={`rounded-xl border p-5 transition-colors cursor-pointer ${
+                isSelected
+                  ? 'border-(--primary-color)/60 bg-(--primary-color)/15 ring-1 ring-(--primary-color)/30'
+                  : m.highlight
+                    ? 'border-(--primary-color)/40 bg-(--primary-color)/10 hover:border-(--primary-color)/60'
+                    : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-700'
               }`}
             >
               <div className="flex items-center justify-between mb-2 gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <code className="font-mono text-sm text-zinc-100 truncate">{m.id}</code>
                   <button
-                    onClick={() => handleCopyModel(m.id)}
+                    onClick={(e) => { e.stopPropagation(); handleCopyModel(m.id) }}
                     className="shrink-0 p-1 rounded-md text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 transition-colors"
                     title="Copy model name"
                   >
@@ -638,9 +619,10 @@ export default function Docs() {
                 </div>
               </div>
             </div>
-          ))}
-        </div>
-      </section>
-    </div>
-  );
+            )
+          })}
+         </div>
+       </section>
+     </div>
+   );
 }
