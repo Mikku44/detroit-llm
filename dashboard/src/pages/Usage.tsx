@@ -11,6 +11,8 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
 import ApiKeyButtons from '../components/ApiKeyButtons'
+import { FiRefreshCw } from 'react-icons/fi'
+import { toast } from 'sonner'
 import { Skeleton } from '../components/ui/skeleton'
 import { Tooltip as UiTooltip, TooltipTrigger as UiTooltipTrigger, TooltipContent as UiTooltipContent } from '../components/ui/tooltip'
 import { CursorTooltip } from '../components/ui/cursor-tooltip'
@@ -69,23 +71,26 @@ function formatTokens(n: number): string {
   return String(n)
 }
 
-function QuotaBar({ label, used, limit }: { label: string; used: number; limit: number }) {
+function QuotaBar({ label, used, limit, animating }: { label: string; used: number; limit: number; animating?: boolean }) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0
   const over = limit > 0 && used >= limit
   return (
-    <div>
+    <div className={animating ? 'animate-pulse' : ''}>
       <div className="mb-1.5 flex items-center justify-between text-sm">
         <span className="text-zinc-400">{label}</span>
-        <span className="tabular-nums text-zinc-300">
+        <span className={`tabular-nums text-zinc-300 transition-opacity duration-300 ${animating ? 'opacity-50' : 'opacity-100'}`}>
           {formatTokens(used)} / {formatTokens(limit)}
           <span className="ml-1 text-zinc-500">({Math.round(pct)}%)</span>
         </span>
       </div>
-      <div className="h-2.5 overflow-hidden rounded-full bg-zinc-800">
+      <div className="relative h-2.5 overflow-hidden rounded-full bg-zinc-800">
         <div
-          className={`h-full rounded-full ${over ? 'bg-red-500' : 'bg-(--primary-color)'}`}
+          className={`h-full rounded-full transition-all duration-700 ease-out ${over ? 'bg-red-500' : 'bg-(--primary-color)'} ${animating ? 'opacity-60' : 'opacity-100'}`}
           style={{ width: `${pct}%` }}
         />
+        {animating && (
+          <div className="absolute inset-0 -translate-x-full animate-[shimmer_1s_ease-in-out_infinite] bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+        )}
       </div>
     </div>
   )
@@ -113,6 +118,7 @@ export default function Usage() {
   const [punchMax, setPunchMax] = useState(0)
   const [loading, setLoading] = useState(true)
   const [limits, setLimits] = useState<UsageLimits | null>(null)
+  const [limitsRefreshing, setLimitsRefreshing] = useState(false)
   const [zoomRange, setZoomRange] = useState<[number, number] | null>(null)
   const chartRef = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ x: number; startIdx: number; span: number } | null>(null)
@@ -179,11 +185,23 @@ export default function Usage() {
       .catch(() => setLimits(null))
   }, [])
 
-  const reloadLimits = () => {
-    api
-      .getUsageLimits()
-      .then(setLimits)
-      .catch(() => setLimits(null))
+  const reloadLimits = async () => {
+    if (limitsRefreshing) return
+    setLimitsRefreshing(true)
+    const start = Date.now()
+    try {
+      const data = await api.getUsageLimits()
+      setLimits(data)
+      toast.success('Tokens refreshed', { description: `${formatTokens(data.weekly_used)} / ${formatTokens(data.weekly_limit ?? 0)} weekly · ${formatTokens(data.monthly_used)} / ${formatTokens(data.monthly_limit ?? 0)} monthly` })
+    } catch (e: any) {
+      setLimits(null)
+      toast.error('Failed to refresh', { description: e?.message || 'Please try again' })
+    } finally {
+      const elapsed = Date.now() - start
+      const minDelay = 700
+      if (elapsed < minDelay) await new Promise((r) => setTimeout(r, minDelay - elapsed))
+      setLimitsRefreshing(false)
+    }
   }
 
   const totals = usage.reduce(
@@ -318,9 +336,11 @@ export default function Usage() {
           </div>
           <button
             onClick={reloadLimits}
-            className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800"
+            disabled={limitsRefreshing}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Refresh
+            <FiRefreshCw size={12} className={limitsRefreshing ? 'animate-spin' : ''} />
+            {limitsRefreshing ? 'Refreshing tokens' : 'Refresh'}
           </button>
         </div>
 
@@ -336,8 +356,8 @@ export default function Usage() {
             <>
               {limits.weekly_limit != null && limits.monthly_limit != null ? (
                 <>
-                  <QuotaBar label="Tokens / week" used={limits.weekly_used} limit={limits.weekly_limit} />
-                  <QuotaBar label="Tokens / month" used={limits.monthly_used} limit={limits.monthly_limit} />
+                  <QuotaBar label="Tokens / week" used={limits.weekly_used} limit={limits.weekly_limit} animating={limitsRefreshing} />
+                  <QuotaBar label="Tokens / month" used={limits.monthly_used} limit={limits.monthly_limit} animating={limitsRefreshing} />
                 </>
               ) : (
                 <p className="text-sm text-zinc-400">
@@ -345,7 +365,7 @@ export default function Usage() {
                 </p>
               )}
               {limits.image_quota != null && (
-                <QuotaBar label="Images / month" used={limits.images_used ?? 0} limit={limits.image_quota} />
+                <QuotaBar label="Images / month" used={limits.images_used ?? 0} limit={limits.image_quota} animating={limitsRefreshing} />
               )}
               {limits.weekly_limit != null &&
                 limits.monthly_limit != null &&

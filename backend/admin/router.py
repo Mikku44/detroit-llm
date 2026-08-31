@@ -394,6 +394,7 @@ async def list_users(
                 "is_owner": u.is_owner,
                 "is_verified": u.is_verified,
                 "is_paid": u.is_paid,
+                "tier_id": u.tier_id,
                 "created_at": u.created_at.isoformat() if u.created_at else None,
             }
             for u in users

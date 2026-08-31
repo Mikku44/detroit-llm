@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { FiRefreshCw } from 'react-icons/fi'
 import { api } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { Navigate } from 'react-router-dom'
@@ -41,6 +42,15 @@ function Dot({ ok }: { ok: boolean }) {
   return <span className={`inline-block h-2.5 w-2.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-red-500'}`} />
 }
 
+const TIER_NAMES: Record<string, string> = { free: 'Free', nomad: 'Nomad', dreamer: 'Dreamer', entrepreneur: 'Entrepreneur', angel: 'Angel' }
+
+function roleBadge(u: { is_owner: boolean; is_member: boolean; is_paid: boolean; tier_id?: string | null }) {
+  if (u.is_owner) return <span className="text-yellow-400">Owner</span>
+  if (u.is_member) return <span className="text-emerald-400">{TIER_NAMES[u.tier_id ?? ''] ? `Member · ${TIER_NAMES[u.tier_id ?? '']}` : 'Member'}</span>
+  if (u.is_paid) return <span className="text-sky-400">{TIER_NAMES[u.tier_id ?? ''] ?? 'Paid'}</span>
+  return <span className="text-zinc-500">Free</span>
+}
+
 function remainText(k: string, v: any): string {
   if (!v?.balance) return v?.error || (v?.configured ? v.status : '—')
   const b = v.balance
@@ -70,6 +80,7 @@ export default function AdminSystem() {
   const load = async (isManual = false) => {
     if (status) setRefreshing(true)
     else if (!isManual) setLoading(true)
+    const start = Date.now()
     try {
       const [s, b, u] = await Promise.all([api.status(), api.getBalances(), api.listUsers()])
       setStatus(s)
@@ -79,6 +90,11 @@ export default function AdminSystem() {
     } catch (e: any) {
       if (!status) setErr(e.message || 'Failed to load')
     } finally {
+      if (isManual) {
+        const elapsed = Date.now() - start
+        const minDelay = 700
+        if (elapsed < minDelay) await new Promise((r) => setTimeout(r, minDelay - elapsed))
+      }
       setLoading(false)
       setRefreshing(false)
     }
@@ -120,7 +136,7 @@ export default function AdminSystem() {
           <h2 className="text-2xl font-bold text-zinc-100 flex items-center gap-2">System Dashboard <span className="rounded-full bg-yellow-900/50 text-yellow-400 text-xs px-2.5 py-0.5">Admin</span></h2>
           <p className="text-sm text-zinc-500 mt-1">v{status?.version} · {status?.time ? new Date(status.time).toLocaleString() : ''}</p>
         </div>
-        <button onClick={() => load(true)} disabled={refreshing} className="rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-50">{refreshing ? 'Refreshing…' : 'Refresh'}</button>
+        <button onClick={() => load(true)} disabled={refreshing} className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-50 disabled:cursor-not-allowed"><FiRefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />{refreshing ? 'Refreshing tokens' : 'Refresh'}</button>
       </div>
       {refreshing && <div className="h-0.5 w-full overflow-hidden rounded bg-zinc-800 mb-4"><div className="h-full w-1/3 bg-[var(--primary-color)] animate-[shimmer_1s_ease-in-out_infinite]" /></div>}
       {err && status && <div className="rounded-lg border border-red-900/50 bg-red-950/20 px-4 py-2 text-xs text-red-400 mb-4">{err}</div>}
@@ -212,7 +228,7 @@ export default function AdminSystem() {
               <TableRow key={u.id}>
                 <TableCell className="font-medium">{u.display_name || '-'}</TableCell>
                 <TableCell className="text-zinc-400">{u.email}</TableCell>
-                <TableCell>{u.is_owner ? <span className="text-yellow-400">Owner</span> : u.is_member ? <span className="text-emerald-400">Member</span> : <span className="text-zinc-500">Free</span>}</TableCell>
+                <TableCell>{roleBadge(u)}</TableCell>
                 <TableCell>{u.is_verified ? '✓' : '—'}</TableCell>
                 <TableCell className="text-xs text-zinc-500">{u.created_at ? new Date(u.created_at).toLocaleDateString() : '-'}</TableCell>
               </TableRow>

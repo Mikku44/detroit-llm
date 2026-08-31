@@ -47,7 +47,7 @@ export default function App() {
           <Route path="chat/:id?" element={<Chat3 />} />
           <Route path="docs" element={<Docs />} />
           <Route path="models" element={<Models />} />
-          <Route path="admin" element={<AdminSystem />} />
+          <Route path="admin" element={<OwnerRoute><AdminSystem /></OwnerRoute>} />
           <Route path="console" element={<OwnerRoute><Console /></OwnerRoute>} />
           <Route path="*" element={<NotFound />} />
         </Route>

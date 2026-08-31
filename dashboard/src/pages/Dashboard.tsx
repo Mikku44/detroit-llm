@@ -126,7 +126,9 @@ export default function Dashboard() {
               user.is_owner ? (
                 <span className="rounded-full bg-yellow-900/50 text-yellow-400 text-xs px-2.5 py-0.5 font-medium">Owner</span>
               ) : user.is_member ? (
-                <span className="rounded-full bg-emerald-900/50 text-emerald-400 text-xs px-2.5 py-0.5 font-medium">Member</span>
+                <span className="rounded-full bg-emerald-900/50 text-emerald-400 text-xs px-2.5 py-0.5 font-medium">{user.tier_id ? `Member · ${user.tier_id}` : 'Member'}</span>
+              ) : user.is_paid ? (
+                <span className="rounded-full bg-sky-900/50 text-sky-400 text-xs px-2.5 py-0.5 font-medium">{user.tier_id ?? 'Paid'}</span>
               ) : (
                 <span className="rounded-full bg-zinc-800 text-zinc-500 text-xs px-2.5 py-0.5 font-medium">Free</span>
               )
