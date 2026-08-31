@@ -59,6 +59,7 @@ const ALLOWED_CHAT_MODELS = new Set([
   'deepseek-v4-flash-vision-exp',
   'qwen3.7-flash',
   'z-image-turbo',
+  'glm-5.3',
   'glm-5.3-flash',
   'glm-4.5-air',
   'glm-4.7-flashx',
@@ -89,6 +90,11 @@ const MODEL_META: Record<string, ModelMeta> = {
     name: 'Z-Image Turbo',
     desc: 'Image — DashScope text-to-image',
     badges: ['image'],
+  },
+  'glm-5.3': {
+    name: 'GLM-5.3',
+    desc: 'Text + Image + Video — Z.AI reasoning flagship',
+    badges: ['text', 'image', 'video', 'reasoning'],
   },
   'glm-5.3-flash': {
     name: 'GLM-5.3-Flash',
@@ -134,6 +140,7 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'deepseek-v4-flash-vision-exp': 1000000,
   'qwen3.7-flash': 1000000,
   'z-image-turbo': 1000000,
+  'glm-5.3': 1000000,
   'glm-5.3-flash': 1000000,
   'glm-4.5-air': 1000000,
   'glm-4.7-flashx': 1000000,

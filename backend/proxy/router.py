@@ -543,7 +543,7 @@ def _is_free_tier_model(model: str) -> bool:
     if not model:
         return False
     # Paid visions/models that contain "flash" but are member-only
-    if model.lower() in ("deepseek-v4-flash-vision-exp", "glm-5.3-flash"):
+    if model.lower() in ("deepseek-v4-flash-vision-exp", "glm-5.3", "glm-5.3-flash"):
         return False
     if model.lower() in FREE_TIER_EXTRA_MODELS:
         return True
@@ -3693,6 +3693,12 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             "type": "model",
             "id": "qwen3.7-flash",
             "display_name": "qwen3.7-flash (DashScope)",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "glm-5.3",
+            "display_name": "glm-5.3 (Z.AI)",
         },
         {
             "object": "model",

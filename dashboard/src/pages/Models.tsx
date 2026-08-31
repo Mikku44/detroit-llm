@@ -20,6 +20,7 @@ const MODELS: ModelInfo[] = [
   { id: 'qwen3.7-flash', tag: 'Fast', desc: 'Qwen 3.7 Flash — fast with optional thinking mode', ctx: '128K', maxOut: '—', tier: 'free' },
   { id: 'gemini-2.5-flash', tag: 'Vision', desc: 'Gemini 2.5 Flash — native vision text+image', ctx: '1M', maxOut: '—', tier: 'free' },
   { id: 'z-image-turbo', tag: 'Image', desc: 'z-image-turbo (DashScope) — text-to-image generation', ctx: '1024×1024', maxOut: '—', tier: 'paid' },
+  { id: 'glm-5.3', tag: 'Reasoning', desc: 'GLM-5.3 — 1M context / 128K max (131,072)', ctx: '1M', maxOut: '128K', tier: 'paid' },
   { id: 'glm-5.3-flash', tag: 'Reasoning', desc: 'GLM-5.3-Flash — 1M context / 128K max (131,072)', ctx: '1M', maxOut: '128K', tier: 'paid' },
   { id: 'glm-4.5-air', tag: 'Reasoning', desc: 'GLM-4.5-Air — lightweight reasoning 65,536 / 98,304', ctx: '98K', maxOut: '98K', tier: 'free' },
   { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX — high-speed reasoning 65,536 / 131,072', ctx: '1M', maxOut: '131K', tier: 'free' },
@@ -72,7 +73,7 @@ export default function Models() {
 
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-xs leading-5 text-zinc-500">
         <div className="font-medium text-zinc-300 mb-1 flex items-center gap-1.5"><FiZap size={12} className="text-[var(--primary-color)]"/> Free tier rule</div>
-        Free = any model with <code className="bg-zinc-800 px-1 py-px rounded">flash</code> in name (except <code className="bg-zinc-800 px-1 py-px rounded">glm-5.3-flash</code> and <code className="bg-zinc-800 px-1 py-px rounded">deepseek-v4-flash-vision-exp</code> which are paid) plus extra <code className="bg-zinc-800 px-1 py-px rounded">glm-4.5-air</code> / <code className="bg-zinc-800 px-1 py-px rounded">glm-4.7-flashx</code>. Use <code className="bg-zinc-800 px-1 py-px rounded">GET /v1/models</code> with your session token to see your allowed list; API keys see all models.
+        Free = any model with <code className="bg-zinc-800 px-1 py-px rounded">flash</code> in name (except <code className="bg-zinc-800 px-1 py-px rounded">glm-5.3</code>, <code className="bg-zinc-800 px-1 py-px rounded">glm-5.3-flash</code> and <code className="bg-zinc-800 px-1 py-px rounded">deepseek-v4-flash-vision-exp</code> which are paid) plus extra <code className="bg-zinc-800 px-1 py-px rounded">glm-4.5-air</code> / <code className="bg-zinc-800 px-1 py-px rounded">glm-4.7-flashx</code>. Use <code className="bg-zinc-800 px-1 py-px rounded">GET /v1/models</code> with your session token to see your allowed list; API keys see all models.
       </div>
     </div>
   )
