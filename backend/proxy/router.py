@@ -466,6 +466,8 @@ FREE_MODEL_ONLY_MESSAGE = (
 
 FREE_TIER_EXTRA_MODELS = {"glm-4.5-air", "glm-4.7-flashx"}
 
+_IMAGE_ONLY_MODELS = {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304"}
+
 MODEL_TOKEN_LIMITS: dict[str, tuple[int, int]] = {
     "glm-5.3": (65536, 131072),
     "glm-5.3-flash": (65536, 131072),
@@ -542,6 +544,8 @@ def _is_free_tier_model(model: str) -> bool:
     """True when the requested model is allowed on the free tier (flash or ox-alpha)."""
     if not model:
         return False
+    if model.lower() in _IMAGE_ONLY_MODELS:
+        return True
     # Paid visions/models that contain "flash" but are member-only
     if model.lower() in ("deepseek-v4-flash-vision-exp", "glm-5.3", "glm-5.3-flash"):
         return False
@@ -592,7 +596,7 @@ async def _free_model_gate(db: AsyncSession, user_id: str, body: dict, default_m
     if _is_free_tier_model(model):
         return model
     # Image-only models are allowed for free tier (quota enforced separately)
-    if model.lower() in {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation"}:
+    if model.lower() in _IMAGE_ONLY_MODELS:
         return model
     if not await _is_free_user(db, user_id):
         return model
@@ -1544,6 +1548,60 @@ async def _dashscope_image(prompt: str, size: str) -> dict:
     return {"ref": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}", "kind": "data_uri"}
 
 
+async def _zai_image(prompt: str, size: str, model: str = "glm-image") -> dict:
+    if not settings.z_api_key:
+        raise RuntimeError("Z_API_KEY not configured")
+    url = f"{settings.z_ai_url.rstrip('/')}/images/generations"
+    # Z.AI CogView-4 / glm-image expects model, prompt, size
+    body = {"model": model, "prompt": prompt or "A beautiful scene", "size": size}
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {settings.z_api_key}"}
+    async with httpx.AsyncClient(timeout=_IMAGE_GEN_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Z.AI image API error ({resp.status_code}): {resp.text[:500]}")
+        data = resp.json()
+    items = data.get("data") or []
+    if not items:
+        raise RuntimeError("Z.AI returned no image")
+    item = items[0] if isinstance(items[0], dict) else {}
+    b64 = item.get("b64_json")
+    image_url = item.get("url")
+    if b64:
+        try:
+            raw = base64.b64decode(b64)
+            mime = "image/png"
+            try:
+                from backend.storage.r2 import upload_bytes, is_configured
+                if is_configured():
+                    r2_url = upload_bytes(raw, mime, prefix="images/generated")
+                    if r2_url:
+                        return {"ref": r2_url, "kind": "url"}
+            except Exception as e:
+                print(f"[r2] zai upload fallback: {e}")
+            return {"ref": f"data:{mime};base64,{b64}", "kind": "data_uri"}
+        except Exception:
+            pass
+    if image_url:
+        # CogView-4 output is an image URL — return it directly. Only attempt R2
+        # persistence when configured, to keep the gateway response fast and avoid
+        # unnecessary egress when the upstream URL is already durable.
+        try:
+            from backend.storage.r2 import upload_bytes, is_configured
+            if is_configured():
+                try:
+                    raw, ctype = await _download_image_bytes(image_url)
+                    mime = ctype if ctype.startswith("image/") else "image/jpeg"
+                    r2_url = upload_bytes(raw, mime, prefix="images/generated")
+                    if r2_url:
+                        return {"ref": r2_url, "kind": "url"}
+                except Exception as e:
+                    print(f"[r2] zai url cache failed ({type(e).__name__}: {e}) -> return upstream url")
+        except Exception:
+            pass
+        return {"ref": image_url, "kind": "url"}
+    raise RuntimeError("Z.AI returned no url/b64_json")
+
+
 async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> dict:
     """Resolve the best available image source for `prompt`.
 
@@ -1556,18 +1614,36 @@ async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> d
       - "mock" (default): deterministic offline SVG, no network
     Any provider failure falls through to the next candidate, ending at mock.
     """
+    if model and model.lower() in ("glm-image", "cogview-4", "cogview-4-250304"):
+        try:
+            ref = await _zai_image(prompt, size, model)
+            print(f"  [image] zai {model.lower()}: {size}")
+            return ref
+        except Exception as e:
+            print(f"  [image] zai {model.lower()} failed ({type(e).__name__}: {e})")
     provider = (settings.image_provider or "mock").strip().lower()
     if provider == "auto":
-        candidates = ("dashscope", "unsplash", "loremflickr", "mock")
+        candidates = ("zai", "dashscope", "unsplash", "loremflickr", "mock")
     elif provider == "dashscope":
         candidates = ("dashscope", "mock")
+    elif provider == "zai":
+        candidates = ("zai", "mock")
     elif provider in ("unsplash", "loremflickr"):
         candidates = (provider, "mock")
     else:
         candidates = ("mock",)
 
     for candidate in candidates:
-        if candidate == "dashscope":
+        if candidate == "zai":
+            try:
+                # Prefer the requested zai model if it is a cogview/glm-image
+                z_model = model if model and model.lower() in ("glm-image", "cogview-4", "cogview-4-250304") else "glm-image"
+                ref = await _zai_image(prompt, size, z_model)
+                print(f"  [image] zai {z_model}: {size}")
+                return ref
+            except Exception as e:
+                print(f"  [image] zai failed ({type(e).__name__}: {e})")
+        elif candidate == "dashscope":
             if not settings.dashscope_api_key:
                 print("  [image] dashscope selected but DASHSCOPE_API_KEY is unset")
             else:
@@ -2266,9 +2342,8 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
             return _with_log(resp, user_id, model, body.get("messages", []))
 
     # If the user explicitly toggled image gen, selected an image-only model
-    # (z-image-turbo etc.), or (in context) asks to create an image,
+    # (z-image-turbo, glm-image etc.), or (in context) asks to create an image,
     # let DeepSeek tool-call our image tool.
-    _IMAGE_ONLY_MODELS = {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation"}
     if model and model.lower() in _IMAGE_ONLY_MODELS:
         image_gen = True
     if image_gen or await _detect_image_intent(body.get("messages") or []):
@@ -2664,7 +2739,7 @@ def _image_engine_model(model: str) -> str:
         engine.lower().startswith("qwen")
         or engine.lower().startswith("glm-") or engine.lower() == "stealth/ox-alpha"
         or engine.startswith("gemini-")
-        or engine in ("gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation")
+        or engine in ("gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304")
     ):
         return "deepseek-v4-pro"
     return engine
@@ -3741,6 +3816,24 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             "type": "model",
             "id": "gemini-2.0-flash-preview-image-generation",
             "display_name": "gemini-image (mock)",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "glm-image",
+            "display_name": "glm-image (Z.AI - CogView-4)",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "cogview-4",
+            "display_name": "cogview-4 (Z.AI)",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "cogview-4-250304",
+            "display_name": "cogview-4-250304 (Z.AI)",
         },
     ]
 

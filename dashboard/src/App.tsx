@@ -14,14 +14,8 @@ import Models from './pages/Models'
 import AdminSystem from './pages/AdminSystem'
 import Console from './pages/Console'
 import NotFound from './pages/NotFound'
+import Landing from './pages/Landing'
 import CookieConsent from './components/CookieConsent'
-
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth()
-  if (loading) return <div className="flex h-screen items-center justify-center text-zinc-500">Loading...</div>
-  if (!user) return <Navigate to="/login" replace />
-  return <>{children}</>
-}
 
 function OwnerRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
@@ -31,6 +25,13 @@ function OwnerRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function HomeRoute() {
+  const { user, loading } = useAuth()
+  if (loading) return <div className="flex h-screen items-center justify-center bg-zinc-950 text-zinc-500">Loading...</div>
+  if (!user) return <Landing />
+  return <Layout />
+}
+
 export default function App() {
   return (
     <>
@@ -38,12 +39,11 @@ export default function App() {
         <Route path="/login" element={<Login />} />
         <Route path="/welcome" element={<Welcome />} />
         <Route path="/callback" element={<Callback />} />
-        <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+        <Route path="/" element={<HomeRoute />}>
           <Route index element={<Dashboard />} />
           <Route path="keys" element={<Keys />} />
           <Route path="usage" element={<Usage />} />
           <Route path="chat-assistant" element={<Chat />} />
-          {/* <Route path="chatv2" element={<ChatV2 />} /> */}
           <Route path="chat/:id?" element={<Chat3 />} />
           <Route path="docs" element={<Docs />} />
           <Route path="models" element={<Models />} />

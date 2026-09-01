@@ -33,7 +33,7 @@ type cachedUsage struct {
 }
 
 var imageOnlyModels = map[string]bool{
-	"z-image-turbo": true, "gpt-image-1": true, "dall-e-3": true, "gemini-2.0-flash-preview-image-generation": true,
+	"z-image-turbo": true, "gpt-image-1": true, "dall-e-3": true, "gemini-2.0-flash-preview-image-generation": true, "glm-image": true, "cogview-4": true, "cogview-4-250304": true,
 }
 
 func isImageModel(model string) bool {
