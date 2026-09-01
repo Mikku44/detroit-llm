@@ -14,6 +14,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func
 
 _IS_TEST = bool(os.getenv("PYTEST_CURRENT_TEST"))
 
@@ -37,6 +38,12 @@ DEEPSEEK_TIMEOUT = 300
 
 # DeepSeek-only chat params that Gemini's OpenAI-compatible endpoint may reject.
 GEMINI_STRIP_KEYS = ("reasoning", "output_config", "reasoning_effort", "thinking")
+
+
+def _gemini_model_for(requested: str | None) -> str:
+    if requested and isinstance(requested, str) and requested.lower().startswith("gemini-"):
+        return requested
+    return settings.gemini_model
 
 _NATIVE_VISION_EXACT = {"deepseek-v4-flash-vision-exp"}
 _NATIVE_VISION_PREFIXES = ("qwen", "glm-", "stealth/")
@@ -2808,13 +2815,13 @@ async def anthropic_messages(
                         "Set GEMINI_API_KEY in the server environment to enable image/video chat."
                     ),
                 )
-            payload["model"] = settings.gemini_model
+            upstream_model = _gemini_model_for(model)
+            payload["model"] = upstream_model
             url = f"{settings.gemini_url}/openai/chat/completions"
             headers = {
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {settings.gemini_api_key}",
             }
-            upstream_model = settings.gemini_model
     elif settings.deepseek_api_key:
         url = f"{settings.deepseek_url}/chat/completions"
         headers = _deepseek_headers()
@@ -3369,7 +3376,9 @@ async def _proxy_to_gemini(
     fallback_prompt_tokens: int,
 ):
     gemini_body = {k: v for k, v in body.items() if k not in GEMINI_STRIP_KEYS}
-    gemini_body["model"] = settings.gemini_model
+    _requested_gemini = body.get("model")
+    _gemini_model = _gemini_model_for(_requested_gemini if isinstance(_requested_gemini, str) else None)
+    gemini_body["model"] = _gemini_model
     url = f"{settings.gemini_url}/openai/chat/completions"
     headers = {
         "Content-Type": "application/json",
@@ -3387,7 +3396,7 @@ async def _proxy_to_gemini(
                         if resp.status_code >= 400:
                             error_body = await resp.aread()
                             msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
-                            yield _sse_error_chunk(f"⚠️ {settings.gemini_model}: {msg} — Please try again later.", settings.gemini_model)
+                            yield _sse_error_chunk(f"⚠️ {_gemini_model}: {msg} — Please try again later.", _gemini_model)
                             yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
                             yield b'data: [DONE]\n\n'
                             return
@@ -3403,7 +3412,7 @@ async def _proxy_to_gemini(
                     prompt_tokens = fallback_prompt_tokens
                 if not completion_tokens:
                     completion_tokens = count_text_tokens(completion_text)
-                await _log_usage(db, user_id, settings.gemini_model, prompt_tokens, completion_tokens)
+                await _log_usage(db, user_id, _gemini_model, prompt_tokens, completion_tokens)
 
         return StreamingResponse(_deadline_wrapper(gemini_stream()), media_type="text/event-stream")
 
@@ -3419,7 +3428,7 @@ async def _proxy_to_gemini(
         await _log_usage(
             db,
             user_id,
-            settings.gemini_model,
+            _gemini_model,
             prompt_tokens,
             completion_tokens,
         )
@@ -3441,8 +3450,9 @@ async def _proxy_gemini_responses(
     response.completed).
     """
     messages = _responses_to_chat_messages(body.get("input") or [])
+    _gr_model = _gemini_model_for(body.get("model") if isinstance(body.get("model"), str) else None)
     gemini_body: dict = {
-        "model": settings.gemini_model,
+        "model": _gr_model,
         "messages": messages,
         "stream": bool(is_stream),
     }
@@ -3481,12 +3491,12 @@ async def _proxy_gemini_responses(
                                 {
                                     "type": "error",
                                     "code": "gemini_upstream_error",
-                                    "message": f"⚠️ {settings.gemini_model}: {detail} — Please try again later.",
+                                    "message": f"⚠️ {_gr_model}: {detail} — Please try again later.",
                                 },
                             )
                             yield _sse_event(
                                 "response.output_text.delta",
-                                {"type": "response.output_text.delta", "delta": f"⚠️ {settings.gemini_model}: {detail} — Please try again later.", "item_id": "msg_responses", "output_index": 0, "content_index": 0},
+                                {"type": "response.output_text.delta", "delta": f"⚠️ {_gr_model}: {detail} — Please try again later.", "item_id": "msg_responses", "output_index": 0, "content_index": 0},
                             )
                             return
                         yield _sse_event(
@@ -3498,7 +3508,7 @@ async def _proxy_gemini_responses(
                                     "object": "response",
                                     "created_at": created_time,
                                     "status": "in_progress",
-                                    "model": settings.gemini_model,
+                                    "model": _gr_model,
                                     "output": [],
                                 },
                             },
@@ -3520,7 +3530,7 @@ async def _proxy_gemini_responses(
                             "object": "response",
                             "created_at": created_time,
                             "status": "completed",
-                            "model": settings.gemini_model,
+                            "model": _gr_model,
                             "output": output,
                             "usage": {
                                 "input_tokens": prompt_tokens or fallback_prompt_tokens,
@@ -3535,7 +3545,7 @@ async def _proxy_gemini_responses(
                     prompt_tokens = fallback_prompt_tokens
                 if not completion_tokens:
                     completion_tokens = count_text_tokens("".join(output_text))
-                await _log_usage(db, user_id, settings.gemini_model, prompt_tokens, completion_tokens)
+                await _log_usage(db, user_id, _gr_model, prompt_tokens, completion_tokens)
 
         return StreamingResponse(_deadline_wrapper(gemini_responses_stream()), media_type="text/event-stream")
 
@@ -3562,14 +3572,14 @@ async def _proxy_gemini_responses(
         if not completion_tokens:
             completion_tokens = count_text_tokens(content)
         output = _build_responses_output(content, chat_tool_calls)
-        await _log_usage(db, user_id, settings.gemini_model, prompt_tokens, completion_tokens)
+        await _log_usage(db, user_id, _gr_model, prompt_tokens, completion_tokens)
         return JSONResponse(
             content={
                 "id": responses_id,
                 "object": "response",
                 "created_at": int(time.time()),
                 "status": "completed",
-                "model": settings.gemini_model,
+                "model": _gr_model,
                 "output": output,
                 "usage": {
                     "input_tokens": prompt_tokens,
@@ -3767,73 +3777,73 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             "object": "model",
             "type": "model",
             "id": "qwen3.7-flash",
-            "display_name": "qwen3.7-flash (DashScope)",
+            "display_name": "qwen3.7-flash",
         },
         {
             "object": "model",
             "type": "model",
             "id": "glm-5.3",
-            "display_name": "glm-5.3 (Z.AI)",
+            "display_name": "glm-5.3",
         },
         {
             "object": "model",
             "type": "model",
             "id": "glm-5.3-flash",
-            "display_name": "glm-5.3-flash (Z.AI)",
+            "display_name": "glm-5.3-flash",
         },
         {
             "object": "model",
             "type": "model",
             "id": "glm-4.5-air",
-            "display_name": "glm-4.5-air (Z.AI)",
+            "display_name": "glm-4.5-air",
         },
         {
             "object": "model",
             "type": "model",
             "id": "glm-4.7-flashx",
-            "display_name": "glm-4.7-flashx (Z.AI)",
+            "display_name": "glm-4.7-flashx",
         },
         {
             "object": "model",
             "type": "model",
             "id": "z-image-turbo",
-            "display_name": "z-image-turbo (DashScope)",
+            "display_name": "z-image-turbo",
         },
         {
             "object": "model",
             "type": "model",
             "id": "gpt-image-1",
-            "display_name": "gpt-image-1 (mock)",
+            "display_name": "gpt-image-1",
         },
         {
             "object": "model",
             "type": "model",
             "id": "dall-e-3",
-            "display_name": "dall-e-3 (mock)",
+            "display_name": "dall-e-3",
         },
         {
             "object": "model",
             "type": "model",
             "id": "gemini-2.0-flash-preview-image-generation",
-            "display_name": "gemini-image (mock)",
+            "display_name": "gemini-image",
         },
         {
             "object": "model",
             "type": "model",
             "id": "glm-image",
-            "display_name": "glm-image (Z.AI - CogView-4)",
+            "display_name": "glm-image",
         },
         {
             "object": "model",
             "type": "model",
             "id": "cogview-4",
-            "display_name": "cogview-4 (Z.AI)",
+            "display_name": "cogview-4",
         },
         {
             "object": "model",
             "type": "model",
             "id": "cogview-4-250304",
-            "display_name": "cogview-4-250304 (Z.AI)",
+            "display_name": "cogview-4-250304",
         },
     ]
 
@@ -3841,6 +3851,9 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
     cached = _models_cache.get(cache_key)
     if cached and (time.monotonic() - cached["ts"] < 300):
         data_cached = cached["data"]
+        for m in data_cached:
+            if isinstance(m.get("display_name"), str):
+                m["display_name"] = re.sub(r"\s*\(.*\)\s*$", "", m["display_name"]).strip() or m.get("id", "")
         if free_user:
             data_cached = [m for m in data_cached if _is_free_tier_model(m.get("id") or "")]
         return JSONResponse(content={"object": "list", "data": data_cached})
@@ -3866,10 +3879,106 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
         if isinstance(m, dict) and m.get("id") not in upstream_ids and m.get("id") not in {
             g["id"] for g in gateway_models
         }:
+            if isinstance(m.get("display_name"), str):
+                m["display_name"] = re.sub(r"\s*\(.*\)\s*$", "", m["display_name"]).strip() or m.get("id", "")
             data.append(m)
+    for m in data:
+        if isinstance(m.get("display_name"), str):
+            m["display_name"] = re.sub(r"\s*\(.*\)\s*$", "", m["display_name"]).strip() or m.get("id", "")
     _models_cache["all"] = {"data": data, "ts": time.monotonic()}
     _models_cache[cache_key] = {"data": data, "ts": time.monotonic()}
     if free_user:
         data = [m for m in data if _is_free_tier_model(m.get("id") or "")]
     return JSONResponse(content={"object": "list", "data": data})
+
+
+async def _query_models_ranking(db: AsyncSession, days: int, limit: int):
+    if days < 1:
+        days = 1
+    if days > 365:
+        days = 365
+    if limit < 1:
+        limit = 1
+    if limit > 100:
+        limit = 100
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    cutoff = now_naive - timedelta(days=days)
+    stmt = (
+        select(
+            UsageLog.model.label("model"),
+            func.count(UsageLog.id).label("requests"),
+            func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
+            func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
+            func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+            func.count(func.distinct(ApiKey.user_id)).label("unique_users"),
+        )
+        .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
+        .where(UsageLog.created_at >= cutoff)
+        .group_by(UsageLog.model)
+        .order_by(func.sum(UsageLog.total_tokens).desc())
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    rows = result.fetchall()
+    total_stmt = select(
+        func.count(UsageLog.id).label("total_requests"),
+        func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+    ).where(UsageLog.created_at >= cutoff)
+    total_row = (await db.execute(total_stmt)).one()
+    total_requests = int(total_row.total_requests or 0)
+    grand_tokens = int(total_row.total_tokens or 0)
+    model_names = [r.model for r in rows if r.model]
+    daily_map: dict[str, dict[str, int]] = {}
+    if model_names:
+        try:
+            daily_stmt = (
+                select(
+                    UsageLog.model.label("model"),
+                    func.date(UsageLog.created_at).label("date"),
+                    func.coalesce(func.sum(UsageLog.total_tokens), 0).label("tokens"),
+                )
+                .where(UsageLog.created_at >= cutoff, UsageLog.model.in_(model_names))
+                .group_by(UsageLog.model, func.date(UsageLog.created_at))
+            )
+            daily_rows = (await db.execute(daily_stmt)).fetchall()
+            for dr in daily_rows:
+                m = dr.model or "unknown"
+                d = str(dr.date)[:10]
+                daily_map.setdefault(m, {})[d] = int(dr.tokens or 0)
+        except Exception:
+            daily_map = {}
+    now_date = now_naive.date()
+    date_list = [(now_date - timedelta(days=days - 1 - i)).isoformat() for i in range(days)]
+    models = []
+    for idx, r in enumerate(rows, start=1):
+        req = int(r.requests)
+        tok = int(r.total_tokens or 0)
+        name = r.model or "unknown"
+        hist = daily_map.get(name, {})
+        daily = [{"date": d, "tokens": hist.get(d, 0)} for d in date_list]
+        models.append(
+            {
+                "rank": idx,
+                "model": name,
+                "requests": req,
+                "prompt_tokens": int(r.prompt_tokens or 0),
+                "completion_tokens": int(r.completion_tokens or 0),
+                "total_tokens": tok,
+                "unique_users": int(r.unique_users or 0),
+                "share_requests": round(req / total_requests * 100, 2) if total_requests else 0,
+                "share_tokens": round(tok / grand_tokens * 100, 2) if grand_tokens else 0,
+                "daily": daily,
+            }
+        )
+    return {"days": days, "total_requests": total_requests, "total_tokens": grand_tokens, "models": models}
+
+
+@router.get("/models/ranking")
+@router.get("/v1/models/ranking")
+async def get_public_models_ranking(
+    days: int = 30,
+    limit: int = 50,
+    db: AsyncSession = Depends(get_db),
+):
+    return await _query_models_ranking(db, days, limit)
 

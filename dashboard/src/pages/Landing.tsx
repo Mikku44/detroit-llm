@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom'
 import { FiCopy, FiCheck } from 'react-icons/fi'
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Button } from '../components/ui/button'
-import { useAuth } from '../lib/auth'
 import PixelBlast from '../components/PixelBlast'
+import PublicNavbar from '../components/PublicNavbar'
+import PublicFooter from '../components/PublicFooter'
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
 import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
@@ -26,7 +27,7 @@ const CODE: Record<string, string> = {
   -d '{
     "model": "${DEFAULT_MODEL}",
     "messages": [
-      {"role": "user", "content": "สวัสดี Detroit LLM"}
+      {"role": "user", "content": "Hello Detroit LLM"}
     ]
   }'`,
   Python: `from openai import OpenAI
@@ -38,7 +39,7 @@ client = OpenAI(
 
 res = client.chat.completions.create(
   model="${DEFAULT_MODEL}",
-  messages=[{"role": "user", "content": "สวัสดี Detroit LLM"}]
+  messages=[{"role": "user", "content": "Hello Detroit LLM"}]
 )
 print(res.choices[0].message.content)`,
   TypeScript: `import OpenAI from "openai"
@@ -50,7 +51,7 @@ const client = new OpenAI({
 
 const res = await client.chat.completions.create({
   model: "${DEFAULT_MODEL}",
-  messages: [{ role: "user", content: "สวัสดี Detroit LLM" }]
+  messages: [{ role: "user", content: "Hello Detroit LLM" }]
 })
 console.log(res.choices[0].message.content)`,
 }
@@ -59,47 +60,27 @@ const LANG: Record<string, string> = { cURL: 'bash', Python: 'python', TypeScrip
 const tabs = ['cURL', 'Python', 'TypeScript']
 
 export default function Landing() {
-  const { user } = useAuth()
   const [activeTab, setActiveTab] = useState('cURL')
   const [copied, setCopied] = useState(false)
   const [faqOpen, setFaqOpen] = useState<number | null>(0)
 
   useEffect(() => {
-    document.title = 'Detroit LLM | แพลตฟอร์ม AI Chat สำหรับสมาชิก MIKKUCN'
+    document.title = 'Detroit LLM Gateway | AI Chat Platform & OpenAI Compatible API'
   }, [])
 
   const faqs = [
-    { q: 'Detroit LLM คืออะไร?', a: 'Detroit LLM คือแพลตฟอร์ม AI Chat และ LLM Gateway สำหรับสมาชิก MIKKUCN ที่ให้คุณแชทกับ AI หลายโมเดลในที่เดียว เลือกโมเดลให้เหมาะกับงานแต่ละแบบได้อย่าง seamless ผ่านอินเทอร์เฟซแชทและ OpenAI-compatible API' },
-    { q: 'รองรับโมเดลอะไรบ้าง?', a: 'ปัจจุบันรองรับ deepseek-v4-flash, deepseek-v4-pro, qwen3.7-flash, z-image-turbo, glm-5.3 และอีกหลายโมเดล ดูรายการล่าสุดได้ที่ /v1/models หรือหน้า Models' },
-    { q: 'ใช้งานกับโค้ดเดิมที่เป็น OpenAI ได้ไหม?', a: 'ได้ทันที เพียงเปลี่ยน base_url เป็น https://chat.khain.app/v1 และใช้ API Key จาก Detroit LLM โค้ด OpenAI SDK เดิมทำงานได้โดยไม่ต้องแก้ messages format' },
-    { q: 'สมัครใช้งานอย่างไร?', a: 'คลิก “เข้าสู่ระบบด้วย Google” ระบบตรวจสอบ YouTube Membership ของช่อง MIKKUCN หรือเลือกอัปเกรดเป็นแพ็กเกจ Paid รับ API Key แล้วเริ่มแชทหรือเรียก API ได้เลย' },
-    { q: 'มีค่าใช้จ่ายอย่างไร?', a: 'สิทธิ์ตาม Tier: สมาชิก YouTube และแพ็กเกจ Paid จะได้โควตา token รายสัปดาห์/เดือน ต่างกัน ดูรายละเอียดที่หน้า Upgrade plan หลังล็อกอิน' },
+    { q: 'What is Detroit LLM?', a: 'Detroit LLM is an AI Chat Platform and LLM Gateway that lets you chat with multiple AI models in one place with seamless model switching via OpenAI-compatible API.' },
+    { q: 'Which models are supported?', a: 'Currently supports deepseek-v4-flash, deepseek-v4-pro, qwen3.7-flash, z-image-turbo, glm-5.3 and more. See the full list at /v1/models or the Models page.' },
+    { q: 'Does it work with existing OpenAI code?', a: 'Yes. Just change base_url to https://chat.khain.app/v1 and use your Detroit LLM API key. Existing OpenAI SDK code works without changes.' },
+    { q: 'How do I get started?', a: 'Click “Sign in with Google” — we verify your MIKKUCN YouTube Membership or Paid plan, then you get an API key and can start chatting or calling the API immediately.' },
+    { q: 'How does pricing work?', a: 'Access is tier-based: YouTube members and Paid plans get different weekly/monthly token quotas. See details on the Upgrade plan after signing in.' },
   ]
 
   const codeText = CODE[activeTab] || CODE.cURL
 
   return (
-    <div className="min-h-screen  bg-zinc-950 text-zinc-100">
-      <header className="sticky top-0 z-40  bg-zinc-950/70">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3 md:px-6">
-          <div className="flex gap-4">
-            <a href="/" className="flex items-center gap-2">
-              <img src="/logo.png" alt="Detroit LLM" className="h-7 w-7 rounded" />
-              <span className="text-sm font-bold tracking-tight md:text-base">Detroit LLM</span>
-              <span className="hidden rounded-full bg-zinc-800 border border-zinc-700 px-2 py-0.5 text-[10px] font-bold text-zinc-300 md:inline">MIKKUCN</span>
-            </a>
-            <nav className="hidden items-center gap-6 text-sm text-zinc-400 md:flex">
-              <a href="#features" className="hover:text-zinc-100">ฟีเจอร์</a>
-              <a href="#models" className="hover:text-zinc-100">โมเดล</a>
-              <a href="#faq" className="hover:text-zinc-100">FAQ</a>
-              <Link to="/docs" className="hover:text-zinc-100">Docs</Link>
-            </nav>
-          </div>
-          <div className="flex items-center gap-2">
-            {user ? <Link to="/" className="inline-flex items-center justify-center rounded-lg bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-white">ไปที่ Dashboard</Link> : <Link to="/login" className="inline-flex items-center justify-center rounded-lg bg-zinc-100 px-5 py-2.5 text-sm font-medium text-zinc-900 hover:bg-white">เข้าสู่ระบบ</Link>}
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen scroll-smooth bg-zinc-950 text-zinc-100">
+      <PublicNavbar />
 
       <div className="relative flex w-full items-center justify-center overflow-hidden py-16">
         <div className="absolute max-h-[800px] max-w-[800px]">
@@ -124,22 +105,24 @@ export default function Landing() {
           />
         </div>
         <div className="absolute inset-0 bg-zinc-950/20 pointer-events-none z-[1]" />
-        <div className="relative z-10 max-w-6xl w-full grid grid-cols-1 lg:grid-cols-2 gap-12 items-center px-8">
+        <div className="relative z-10 max-w-6xl w-full grid grid-cols-1 lg:grid-cols-2 gap-12 items-center">
             <div className="space-y-6">
               <span className="text-sm font-medium text-zinc-500 tracking-wide">Detroit LLM Platform</span>
-              <h1 className="text-5xl lg:text-6xl  leading-tight font-normal text-zinc-50">
-                Detroit LLM<br />
-              
+              <h1 className="text-5xl lg:text-6xl font-serif leading-tight font-normal text-zinc-50">
+                Start building <br />
+                with Detroit LLM
               </h1>
-             
+              <p className="text-zinc-400 text-lg max-w-md leading-relaxed">
+                Everything you need to integrate Detroit LLM into your applications. From first API call to production.
+              </p>
               <p className="text-zinc-500 text-sm max-w-md leading-relaxed">
-                API เข้ากันได้กับ OpenAI SDK ใช้งานโค้ดเดิมได้ทันที ผ่าน <code className="rounded bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 text-xs text-zinc-300">/v1/chat/completions</code>
+                OpenAI compatible — use your existing SDK via <code className="rounded bg-zinc-900 border border-zinc-800 px-1.5 py-0.5 text-xs text-zinc-300">/v1/chat/completions</code>
               </p>
               <div className="flex flex-wrap gap-3 pt-2">
-                <Link to="/login" className="inline-flex items-center justify-center rounded-lg bg-zinc-100 px-6 py-3 text-sm font-medium text-zinc-900 hover:bg-white">เริ่มต้นใช้งานฟรี</Link>
-                <Link to="/docs" className="inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 px-6 py-3 text-sm font-medium text-zinc-200 hover:bg-zinc-800">ดู API Docs</Link>
+                <Link to="/login" className="inline-flex items-center justify-center rounded-lg bg-zinc-100 px-6 py-3 text-sm font-medium text-zinc-900 hover:bg-white">Get started for free →</Link>
+              <Link to="/docs" className="inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 px-6 py-3 text-sm font-medium text-zinc-200 hover:bg-zinc-800">View API Docs →</Link>
               </div>
-              
+
             </div>
 
             <div className="bg-zinc-900 rounded-xl border border-zinc-800 shadow-sm overflow-hidden">
@@ -166,16 +149,16 @@ export default function Landing() {
       <div className="p-8  space-y-16">
 
         <section id="features" className="max-w-6xl w-full mx-auto">
-          <h2 className="text-2xl  font-normal text-zinc-50 mb-2">ทำไมต้อง Detroit LLM?</h2>
-          <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">แพลตฟอร์มเดียวที่รวมแชท + API + จัดการคีย์ + ดู usage ครบในที่เดียว</p>
+          <h2 className="text-2xl  font-normal text-zinc-50 mb-2">Why Detroit LLM?</h2>
+          <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">Everything you need — chat, API, key management and usage in one place.</p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {[
-              { t: 'หลายโมเดล เลือกตามงาน', d: 'สลับโมเดลได้ทันทีในแชท เลือก DeepSeek สำหรับโค้ด Qwen สำหรับงานทั่วไป GLM สำหรับภาษาไทย — seamless' },
-              { t: 'OpenAI Compatible API', d: 'Endpoint /v1/chat/completions และ /v1/models ใช้ OpenAI SDK, Vercel AI SDK, LangChain ได้ทันที' },
-              { t: 'แชท + API Key + Usage', d: 'แชทบนเว็บ จัดการ API Key ดูกราฟ Requests/Tokens/Punchcard และโควตา Tier แบบโปร่งใส' },
-              { t: 'Streaming เร็ว', d: 'Go Gateway + SGLang ให้ latency ต่ำ รองรับ streaming แบบเดียวกับ OpenAI' },
-              { t: 'สิทธิ์สมาชิก MIKKUCN', d: 'ผูกกับ YouTube Membership ตรวจสอบอัตโนมัติ หรือสมัคร Paid Plan ได้โดยตรง' },
-              { t: 'LLM Gateway เสถียร', d: 'โควตา Tier รายสัปดาห์/เดือน ชัดเจน ไม่ต้องเติมเครดิตหลายเจ้า เหมาะกับผู้ใช้ไทย' },
+              { t: 'Multiple models, one gateway', d: 'Switch models instantly in chat — DeepSeek for code, Qwen for general tasks, GLM for language — seamless.' },
+              { t: 'OpenAI Compatible API', d: 'Endpoint /v1/chat/completions and /v1/models works with OpenAI SDK, Vercel AI SDK, LangChain instantly.' },
+              { t: 'Chat + API Keys + Usage', d: 'Web chat, API key management, Requests/Tokens/Punchcard graphs and transparent Tier quotas.' },
+              { t: 'Fast streaming', d: 'Go Gateway + SGLang for low latency streaming just like OpenAI.' },
+              { t: 'MIKKUCN membership', d: 'Linked to YouTube Membership — auto-verified, or subscribe to Paid plan directly.' },
+              { t: 'Stable LLM Gateway', d: 'Clear weekly/monthly Tier quotas — no need to top up multiple providers.' },
             ].map((f) => (
               <div key={f.t} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
                 <h4 className="text-sm font-medium text-zinc-200 mb-1">{f.t}</h4>
@@ -186,16 +169,16 @@ export default function Landing() {
         </section>
 
         <section id="models" className="max-w-6xl w-full mx-auto">
-          <h2 className="text-2xl  font-normal text-zinc-50 mb-2">รองรับหลายโมเดล — เลือกให้เหมาะกับงาน</h2>
-          <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">เหมือน OpenRouter ที่ให้คุณเลือกโมเดลที่เก่งแต่ละด้าน Detroit LLM ก็ให้คุณสลับโมเดลได้แบบ seamless</p>
+          <h2 className="text-2xl  font-normal text-zinc-50 mb-2">Multiple models — pick the right one for the job</h2>
+          <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">Choose the model that excels at each task and switch seamlessly in one chat.</p>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             {[
-              { id: 'deepseek-v4-flash', tag: 'Fast', desc: 'DeepSeek V4 Flash — เร็ว เหมาะกับงานทั่วไป Q&A ปริมาณมาก', ctx: '1M context', size: '304B' },
-              { id: 'deepseek-v4-pro', tag: 'Flagship', desc: 'DeepSeek V4 Pro — เก่งสุด สำหรับ reasoning โค้ด และงานโปรดักชัน', ctx: '1M context', size: '304B' },
-              { id: 'qwen3.7-flash', tag: 'Fast', desc: 'Qwen 3.7 Flash — เร็ว มี thinking mode สำหรับ reasoning', ctx: '128K context', size: '—' },
-              { id: 'z-image-turbo', tag: 'Image', desc: 'z-image-turbo — สร้างรูปภาพ 1024×1024 คุณภาพสูง', ctx: '1024×1024', size: '—' },
+              { id: 'deepseek-v4-flash', tag: 'Fast', desc: 'DeepSeek V4 Flash — fast for everyday Q&A and high-volume tasks', ctx: '1M context', size: '304B' },
+              { id: 'deepseek-v4-pro', tag: 'Flagship', desc: 'DeepSeek V4 Pro — most capable for reasoning, code and production', ctx: '1M context', size: '304B' },
+              { id: 'qwen3.7-flash', tag: 'Fast', desc: 'Qwen 3.7 Flash — fast with thinking mode for stronger reasoning', ctx: '128K context', size: '—' },
+              { id: 'z-image-turbo', tag: 'Image', desc: 'z-image-turbo — high-quality 1024×1024 image generation', ctx: '1024×1024', size: '—' },
               { id: 'glm-5.3', tag: 'Reasoning', desc: 'GLM-5.3 — 1M context / max 128K output', ctx: '1M context', size: '128K max' },
-              { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX — เร็วและประหยัด', ctx: '131K max', size: '65K default' },
+              { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX — fast and efficient', ctx: '131K max', size: '65K default' },
             ].map((m) => (
               <div key={m.id} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
                 <div className="flex items-center justify-between mb-2 gap-2">
@@ -210,21 +193,21 @@ export default function Landing() {
               </div>
             ))}
           </div>
-          <p className="mt-4 text-xs text-zinc-500">ดูรายการทั้งหมด: <code className="font-mono text-xs text-zinc-300">GET {API_BASE}/v1/models</code></p>
+          <p className="mt-4 text-xs text-zinc-500">See all: <code className="font-mono text-xs text-zinc-300">GET {API_BASE}/v1/models</code></p>
         </section>
 
         <section className="max-w-6xl w-full mx-auto">
-          <h2 className="text-2xl  font-normal text-zinc-50 mb-2">เริ่มต้นใน 3 ขั้นตอน</h2>
+          <h2 className="text-2xl  font-normal text-zinc-50 mb-2">Get started in 3 steps</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) text-sm font-bold">1</div><h4 className="text-sm font-medium text-zinc-200 mt-3">เข้าสู่ระบบด้วย Google</h4><p className="text-xs text-zinc-400 leading-relaxed mt-1">เชื่อม YouTube Membership อัตโนมัติ หรือเลือก Paid Plan</p></div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) text-sm font-bold">2</div><h4 className="text-sm font-medium text-zinc-200 mt-3">รับ API Key</h4><p className="text-xs text-zinc-400 leading-relaxed mt-1">สร้างคีย์ที่หน้า Keys แล้วนำไปใส่ในโค้ด OpenAI SDK</p></div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) text-sm font-bold">3</div><h4 className="text-sm font-medium text-zinc-200 mt-3">เลือกโมเดลแล้วแชท</h4><p className="text-xs text-zinc-400 leading-relaxed mt-1">สลับโมเดลตามงาน ดู usage แบบเรียลไทม์</p></div>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) text-sm font-bold">1</div><h4 className="text-sm font-medium text-zinc-200 mt-3">Sign in with Google</h4><p className="text-xs text-zinc-400 leading-relaxed mt-1">Auto-verifies YouTube Membership or choose a Paid plan</p></div>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) text-sm font-bold">2</div><h4 className="text-sm font-medium text-zinc-200 mt-3">Get your API key</h4><p className="text-xs text-zinc-400 leading-relaxed mt-1">Create a key on the Keys page and use it with OpenAI SDK</p></div>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5"><div className="flex h-8 w-8 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) text-sm font-bold">3</div><h4 className="text-sm font-medium text-zinc-200 mt-3">Pick a model and chat</h4><p className="text-xs text-zinc-400 leading-relaxed mt-1">Switch models per task and monitor usage in real time</p></div>
           </div>
         </section>
 
         <section id="faq" className="max-w-6xl w-full mx-auto">
-          <h2 className="text-2xl  font-normal text-zinc-50 mb-2">คำถามที่พบบ่อย</h2>
-          <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">ทุกสิ่งที่คุณต้องรู้เกี่ยวกับ Detroit LLM</p>
+          <h2 className="text-2xl  font-normal text-zinc-50 mb-2">FAQ</h2>
+          <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">Everything you need to know about Detroit LLM</p>
           <div className="divide-y divide-zinc-800 rounded-xl border border-zinc-800 bg-zinc-900/50 overflow-hidden">
             {faqs.map((f, i) => {
               const open = faqOpen === i
@@ -246,32 +229,41 @@ export default function Landing() {
         </section>
 
         <section className="max-w-6xl w-full mx-auto">
-          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-8 text-center">
-            <h2 className="text-2xl  font-normal text-zinc-50">พร้อมลอง Detroit LLM แล้วหรือยัง?</h2>
-           
-            <div className="mt-6 flex flex-wrap justify-center gap-3">
-              <Link to="/login" className="inline-flex items-center justify-center rounded-lg bg-zinc-100 px-8 py-3 text-sm font-medium text-zinc-900 hover:bg-white">เข้าสู่ระบบด้วย Google</Link>
-              <a href="https://discord.gg/KuMVmcK3cC" target="_blank" rel="noreferrer" className="inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 px-6 py-3 text-sm font-medium text-zinc-200 hover:bg-zinc-800">เข้าร่วม Discord</a>
+          <div className="relative overflow-hidden rounded-xl border border-zinc-800 p-8 text-center">
+            <div className="absolute h-[300px] max-w-[800px] mx-auto w-full">
+              <PixelBlast
+                variant="square"
+                pixelSize={6}
+                color="#362F4F"
+                className=""
+                enableRipples={true}
+                speed={0.8}
+                edgeFade={0.3}
+                patternScale={2}
+                patternDensity={1}
+                pixelSizeJitter={0}
+                rippleSpeed={0.9}
+                rippleThickness={0.12}
+                rippleIntensityScale={1.5}
+                liquid={false}
+                liquidStrength={0.12}
+                liquidRadius={1.2}
+                liquidWobbleSpeed={5}
+              />
+            </div>
+            <div className="absolute inset-0 bg-zinc-950/30 pointer-events-none z-[1]" />
+            <div className="relative z-10">
+              <h2 className="text-2xl font-normal text-zinc-50">Ready to try Detroit LLM?</h2>
+              <div className="mt-6 flex flex-wrap justify-center gap-3">
+                <Link to="/login" className="inline-flex items-center justify-center rounded-lg bg-zinc-100 px-8 py-3 text-sm font-medium text-zinc-900 hover:bg-white">Sign in with Google</Link>
+                <a href="https://discord.gg/KuMVmcK3cC" target="_blank" rel="noreferrer" className="inline-flex items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900/80 backdrop-blur px-6 py-3 text-sm font-medium text-zinc-200 hover:bg-zinc-800">Join Discord</a>
+              </div>
             </div>
           </div>
         </section>
 
-        <footer className="max-w-6xl w-full mx-auto border-t border-zinc-800 pt-8">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div className="text-sm text-zinc-500">
-              <div className="font-medium text-zinc-300">Detroit LLM</div>
-              <div className="mt-1 text-xs leading-relaxed">Detroit LLM แพลตฟอร์ม AI Chat สำหรับสมาชิก MIKKUCN รองรับ AI หลายโมเดลและเลือกโมเดลให้เหมาะกับงานแบบ seamless<br />OpenRouter alternative • LLM Gateway • AI Gateway Thailand</div>
-            </div>
-            <div className="flex gap-4 text-xs text-zinc-500">
-              <Link to="/docs" className="hover:text-zinc-300">Docs</Link>
-              <Link to="/models" className="hover:text-zinc-300">Models</Link>
-              <a href="/privacy-policy.md" className="hover:text-zinc-300">Privacy</a>
-              <a href="/terms-of-use.md" className="hover:text-zinc-300">Terms</a>
-            </div>
-          </div>
-          <div className="mt-4 text-xs text-zinc-600">© {new Date().getFullYear()} Detroit LLM — MIKKUCN • chat.khain.app</div>
-        </footer>
       </div>
+      <PublicFooter />
     </div>
   )
 }

@@ -4,4 +4,6 @@
   <url><loc>https://chat.khain.app/login</loc><changefreq>monthly</changefreq><priority>0.8</priority></url>
   <url><loc>https://chat.khain.app/docs</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
   <url><loc>https://chat.khain.app/models</loc><changefreq>weekly</changefreq><priority>0.7</priority></url>
+  <url><loc>https://chat.khain.app/terms</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://chat.khain.app/privacy</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
 </urlset>

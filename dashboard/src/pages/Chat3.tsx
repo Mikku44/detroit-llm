@@ -59,6 +59,7 @@ const ALLOWED_CHAT_MODELS = new Set([
   'deepseek-v4-flash-vision-exp',
   'qwen3.7-flash',
   'z-image-turbo',
+  'glm-image',
   'glm-5.3',
   'glm-5.3-flash',
   'glm-4.5-air',
@@ -89,6 +90,11 @@ const MODEL_META: Record<string, ModelMeta> = {
   'z-image-turbo': {
     name: 'Z-Image Turbo',
     desc: 'Image — DashScope text-to-image',
+    badges: ['image'],
+  },
+  'glm-image': {
+    name: 'GLM Image',
+    desc: 'Image — Z.AI text-to-image (CogView)',
     badges: ['image'],
   },
   'glm-5.3': {
@@ -140,6 +146,7 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'deepseek-v4-flash-vision-exp': 1000000,
   'qwen3.7-flash': 1000000,
   'z-image-turbo': 1000000,
+  'glm-image': 1000000,
   'glm-5.3': 1000000,
   'glm-5.3-flash': 1000000,
   'glm-4.5-air': 1000000,
@@ -556,6 +563,9 @@ export default function Chat3() {
         if (!filtered.includes('z-image-turbo') && ALLOWED_CHAT_MODELS.has('z-image-turbo')) {
           filtered = [...filtered, 'z-image-turbo']
         }
+        if (!filtered.includes('glm-image') && ALLOWED_CHAT_MODELS.has('glm-image')) {
+          filtered = [...filtered, 'glm-image']
+        }
         const toShow = filtered.filter((id: string) => ALLOWED_CHAT_MODELS.has(id))
         if (toShow.length) {
           setModels(toShow)
@@ -683,12 +693,12 @@ export default function Chat3() {
         : 'deepseek-v4-flash'
       : model
     const NATIVE_VISION_MODELS = new Set(['deepseek-v4-flash-vision-exp', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-4.5-air', 'glm-4.7-flashx', 'gemini-2.5-flash'])
-    const upstreamModel = hasMedia && !NATIVE_VISION_MODELS.has(requestModel) ? 'gemini-2.5-flash' : requestModel
+    const upstreamModel = hasMedia && !NATIVE_VISION_MODELS.has(requestModel) ? (requestModel.startsWith('gemini-') ? requestModel : 'gemini-2.5-flash') : requestModel
     setMessages((m) => [...m, { role: 'user', content: text, attachments, model: requestModel }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
     setBusy(true)
     setIsVision(hasMedia)
 
-    const IMAGE_ONLY_MODELS = new Set(['z-image-turbo', 'gpt-image-1', 'dall-e-3', 'gemini-2.0-flash-preview-image-generation'])
+    const IMAGE_ONLY_MODELS = new Set(['z-image-turbo', 'glm-image', 'gpt-image-1', 'dall-e-3', 'gemini-2.0-flash-preview-image-generation'])
     const isImageModel = IMAGE_ONLY_MODELS.has(requestModel)
     const doImageGen = imageGen || isImageModel
     const history = doImageGen

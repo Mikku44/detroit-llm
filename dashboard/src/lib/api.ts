@@ -14,11 +14,23 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
     headers['Authorization'] = `Bearer ${token}`
   }
   const res = await fetch(`${BASE}${path}`, { ...options, headers })
+  const ct = res.headers.get('content-type') || ''
   if (!res.ok) {
+    if (ct.includes('text/html')) {
+      const text = await res.text().catch(() => res.statusText)
+      throw new Error(text.slice(0, 200) || res.statusText)
+    }
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || 'Request failed')
   }
-  return res.json()
+  if (ct.includes('text/html')) {
+    const text = await res.text()
+    if (text.trim().startsWith('<!doctype') || text.trim().startsWith('<html')) {
+      throw new Error(`Unexpected HTML response for ${path} — proxy misconfigured`)
+    }
+    try { return JSON.parse(text) } catch { throw new Error(`Invalid JSON for ${path}`) }
+  }
+  return res.json().catch(() => { throw new Error(`Invalid JSON for ${path}`) })
 }
 
 export const api = {
@@ -60,6 +72,14 @@ export const api = {
 
   status: () => request('/admin/status'),
   getBalances: () => request('/admin/balances'),
+  getModelsRanking: async (days: number = 30, limit: number = 50) => {
+    const qs = `?days=${days}&limit=${limit}`
+    try { return await request(`/v1/models/ranking${qs}`) } catch (e: any) {
+      try { return await request(`/models/ranking${qs}`) } catch {}
+      return await request(`/admin/models/ranking${qs}`)
+    }
+  },
+  getAdminModelsRanking: (days: number = 30, limit: number = 50) => request(`/admin/models/ranking?days=${days}&limit=${limit}`),
 
   verifyMembers: () => request('/auth/youtube/verify-members', { method: 'POST' }),
 

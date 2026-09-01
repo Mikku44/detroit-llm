@@ -1,6 +1,9 @@
-import { useState } from 'react'
-import { FiCheck, FiCopy, FiZap, FiLock, FiUnlock } from 'react-icons/fi'
-
+import { useEffect, useState } from 'react'
+import { FiCheck, FiCopy, FiZap, FiLock, FiUnlock, FiRefreshCw, FiBarChart2 } from 'react-icons/fi'
+import { api } from '../lib/api'
+import { Skeleton } from '../components/ui/skeleton'
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
+import { AreaChart, Area, ResponsiveContainer } from 'recharts'
 
 type Tier = 'free' | 'paid'
 type ModelInfo = {
@@ -20,11 +23,32 @@ const MODELS: ModelInfo[] = [
   { id: 'qwen3.7-flash', tag: 'Fast', desc: 'Qwen 3.7 Flash — fast with optional thinking mode', ctx: '128K', maxOut: '—', tier: 'free' },
   { id: 'gemini-2.5-flash', tag: 'Vision', desc: 'Gemini 2.5 Flash — native vision text+image', ctx: '1M', maxOut: '—', tier: 'free' },
   { id: 'z-image-turbo', tag: 'Image', desc: 'z-image-turbo (DashScope) — text-to-image generation', ctx: '1024×1024', maxOut: '—', tier: 'paid' },
+  { id: 'glm-image', tag: 'Image', desc: 'glm-image (Z.AI CogView) — text-to-image generation', ctx: '1024×1024', maxOut: '—', tier: 'paid' },
   { id: 'glm-5.3', tag: 'Reasoning', desc: 'GLM-5.3 — 1M context / 128K max (131,072)', ctx: '1M', maxOut: '128K', tier: 'paid' },
   { id: 'glm-5.3-flash', tag: 'Reasoning', desc: 'GLM-5.3-Flash — 1M context / 128K max (131,072)', ctx: '1M', maxOut: '128K', tier: 'paid' },
   { id: 'glm-4.5-air', tag: 'Reasoning', desc: 'GLM-4.5-Air — lightweight reasoning 65,536 / 98,304', ctx: '98K', maxOut: '98K', tier: 'free' },
   { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX — high-speed reasoning 65,536 / 131,072', ctx: '1M', maxOut: '131K', tier: 'free' },
 ]
+
+type RankRow = {
+  rank: number
+  model: string
+  requests: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  unique_users: number
+  share_requests: number
+  share_tokens: number
+  daily: { date: string; tokens: number }[]
+}
+
+function Medal({ rank }: { rank: number }) {
+  if (rank === 1) return <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-yellow-500/20 text-yellow-400 text-xs font-bold">1</span>
+  if (rank === 2) return <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-zinc-400/20 text-zinc-300 text-xs font-bold">2</span>
+  if (rank === 3) return <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-amber-700/30 text-amber-500 text-xs font-bold">3</span>
+  return <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-zinc-800 text-zinc-500 text-xs font-medium">{rank}</span>
+}
 
 export default function Models() {
   const [filter, setFilter] = useState<'all' | Tier>('all')
@@ -38,6 +62,38 @@ export default function Models() {
   const paidCount = MODELS.filter(m => m.tier === 'paid').length
   const listAll = MODELS
   const filtered = filter === 'all' ? listAll : listAll.filter(m => m.tier === filter)
+
+  const [days, setDays] = useState(30)
+  const [rows, setRows] = useState<RankRow[]>([])
+  const [totalReq, setTotalReq] = useState(0)
+  const [totalTok, setTotalTok] = useState(0)
+  const [rankLoading, setRankLoading] = useState(true)
+  const [rankRefreshing, setRankRefreshing] = useState(false)
+  const [rankErr, setRankErr] = useState<string | null>(null)
+
+  const loadRanking = async (manual = false) => {
+    if (rows.length) setRankRefreshing(true)
+    else setRankLoading(true)
+    const start = Date.now()
+    try {
+      const data = await api.getModelsRanking(days, 50)
+      setRows(data.models || [])
+      setTotalReq(data.total_requests || 0)
+      setTotalTok(data.total_tokens || 0)
+      setRankErr(null)
+    } catch (e: any) {
+      if (!rows.length) setRankErr(e.message || 'Failed to load ranking')
+    } finally {
+      if (manual) {
+        const elapsed = Date.now() - start
+        if (elapsed < 700) await new Promise(r => setTimeout(r, 700 - elapsed))
+      }
+      setRankLoading(false)
+      setRankRefreshing(false)
+    }
+  }
+
+  useEffect(() => { loadRanking() }, [days])
 
   return (
     <div className="p-8 text-zinc-100 font-sans space-y-10 max-w-6xl mx-auto w-full">
@@ -74,6 +130,110 @@ export default function Models() {
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-4 text-xs leading-5 text-zinc-500">
         <div className="font-medium text-zinc-300 mb-1 flex items-center gap-1.5"><FiZap size={12} className="text-[var(--primary-color)]"/> Free tier rule</div>
         Free = any model with <code className="bg-zinc-800 px-1 py-px rounded">flash</code> in name (except <code className="bg-zinc-800 px-1 py-px rounded">glm-5.3</code>, <code className="bg-zinc-800 px-1 py-px rounded">glm-5.3-flash</code> and <code className="bg-zinc-800 px-1 py-px rounded">deepseek-v4-flash-vision-exp</code> which are paid) plus extra <code className="bg-zinc-800 px-1 py-px rounded">glm-4.5-air</code> / <code className="bg-zinc-800 px-1 py-px rounded">glm-4.7-flashx</code>. Use <code className="bg-zinc-800 px-1 py-px rounded">GET /v1/models</code> with your session token to see your allowed list; API keys see all models.
+      </div>
+
+      <div className="border-t border-zinc-800 pt-10 space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-zinc-100 flex items-center gap-2"><FiBarChart2 /> Model Ranking</h2>
+            <p className="text-sm text-zinc-500 mt-1">{totalReq.toLocaleString()} requests · {totalTok.toLocaleString()} tokens · {days} days</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select value={days} onChange={e => setDays(Number(e.target.value))} className="h-9 rounded-xl border border-zinc-700 bg-zinc-900 px-3 text-sm text-zinc-200">
+              <option value={1}>24 hours</option>
+              <option value={7}>7 days</option>
+              <option value={30}>30 days</option>
+              <option value={90}>90 days</option>
+              <option value={365}>365 days</option>
+            </select>
+            <button onClick={() => loadRanking(true)} disabled={rankRefreshing} className="inline-flex items-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"><FiRefreshCw size={14} className={rankRefreshing ? 'animate-spin' : ''} />{rankRefreshing ? 'Refreshing' : 'Refresh'}</button>
+          </div>
+        </div>
+
+        {rankRefreshing && <div className="h-0.5 w-full overflow-hidden rounded bg-zinc-800"><div className="h-full w-1/3 bg-[var(--primary-color)] animate-[shimmer_1s_ease-in-out_infinite]" /></div>}
+
+        {rankLoading ? (
+          <div className="space-y-3">
+            <Skeleton className="h-12 w-full" />
+            <Skeleton className="h-64 w-full" />
+          </div>
+        ) : rankErr && !rows.length ? (
+          <div className="rounded-xl border border-red-900/50 bg-red-950/20 p-6">
+            <p className="text-red-400 text-sm">{rankErr}</p>
+            <button onClick={() => loadRanking(true)} className="mt-3 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300">Retry</button>
+          </div>
+        ) : rows.length === 0 ? (
+          <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-12 text-center">
+            <p className="text-zinc-500 text-sm">No usage in the last {days} days</p>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {rows.slice(0, 3).map(r => (
+                <div key={r.model} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
+                  <div className="flex items-center gap-3 mb-2"><Medal rank={r.rank} /><span className="font-mono text-sm text-zinc-100 truncate">{r.model}</span></div>
+                  <div className="text-2xl font-bold text-zinc-100">{r.requests.toLocaleString()} <span className="text-xs font-normal text-zinc-500">requests</span></div>
+                  <div className="text-xs text-zinc-500 mt-1">{r.total_tokens.toLocaleString()} tokens · {r.share_tokens}%</div>
+                  <div className="mt-3 h-12 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={r.daily} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+                        <defs>
+                          <linearGradient id={`topArea-${r.rank}`} x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stopColor="var(--primary-color)" stopOpacity={0.5} />
+                            <stop offset="100%" stopColor="var(--primary-color)" stopOpacity={0.05} />
+                          </linearGradient>
+                        </defs>
+                        <Area type="monotone" dataKey="tokens" stroke="var(--primary-color)" strokeWidth={1.5} fill={`url(#topArea-${r.rank})`} dot={false} isAnimationActive={false} />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-14">#</TableHead>
+                    <TableHead>Model</TableHead>
+                    <TableHead className="text-right">Requests</TableHead>
+                    <TableHead className="text-right">Tokens</TableHead>
+                    <TableHead className="w-32">Share</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map(r => (
+                    <TableRow key={r.model}>
+                      <TableCell><Medal rank={r.rank} /></TableCell>
+                      <TableCell className="font-mono text-xs text-zinc-200 max-w-[280px] truncate" title={r.model}>{r.model}</TableCell>
+                      <TableCell className="text-right tabular-nums text-zinc-300">{r.requests.toLocaleString()} <span className="text-xs text-zinc-500">({r.share_requests}%)</span></TableCell>
+                      <TableCell className="text-right tabular-nums text-zinc-300">{r.total_tokens.toLocaleString()}</TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2" title={`${r.share_tokens}% of tokens`}>
+                          <div className="flex-1 h-8 w-24">
+                            <ResponsiveContainer width="100%" height="100%">
+                              <AreaChart data={r.daily} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+                                <defs>
+                                  <linearGradient id={`rankArea-${r.rank}`} x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="0%" stopColor="var(--primary-color)" stopOpacity={0.5} />
+                                    <stop offset="100%" stopColor="var(--primary-color)" stopOpacity={0.05} />
+                                  </linearGradient>
+                                </defs>
+                                <Area type="monotone" dataKey="tokens" stroke="var(--primary-color)" strokeWidth={1.5} fill={`url(#rankArea-${r.rank})`} dot={false} isAnimationActive={false} />
+                              </AreaChart>
+                            </ResponsiveContainer>
+                          </div>
+                          <span className="text-xs tabular-nums text-zinc-400 w-12 text-right">{r.share_tokens}%</span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

@@ -459,7 +459,7 @@ export default function Docs() {
       <section className="max-w-6xl w-full mx-auto">
         <h2 className="text-2xl font-serif font-normal text-zinc-50 mb-2">Image generation</h2>
         <p className="text-zinc-400 text-sm mb-6 max-w-2xl leading-relaxed">
-          Generate images with <code className="font-mono">z-image-turbo</code> (Alibaba Cloud DashScope).
+          Generate images with <code className="font-mono">z-image-turbo</code> (Alibaba Cloud DashScope) or <code className="font-mono">glm-image</code> (Z.AI CogView).
           OpenAI-compatible <code className="font-mono">/v1/images/generations</code>, or via the chat
           Image Gen toggle.
         </p>
@@ -570,6 +570,14 @@ export default function Docs() {
               id: 'z-image-turbo',
               tag: 'Image',
               desc: 'z-image-turbo (Alibaba Cloud DashScope) — real AI image generation. Used by the image tool when you toggle Image Gen in chat.',
+              ctx: '1024×1024',
+              size: '—',
+              highlight: false,
+            },
+            {
+              id: 'glm-image',
+              tag: 'Image',
+              desc: 'glm-image (Z.AI CogView) — text-to-image generation via Z.AI.',
               ctx: '1024×1024',
               size: '—',
               highlight: false,

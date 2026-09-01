@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { FiRefreshCw } from 'react-icons/fi'
+import { Link } from 'react-router-dom'
 import { api } from '../lib/api'
 import { useAuth } from '../lib/auth'
 import { Navigate } from 'react-router-dom'
@@ -76,16 +77,18 @@ export default function AdminSystem() {
   const [refreshing, setRefreshing] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [balTab, setBalTab] = useState<'remain' | 'json'>('remain')
+  const [modelRank, setModelRank] = useState<{ models: any[]; total_requests: number; total_tokens: number } | null>(null)
 
   const load = async (isManual = false) => {
     if (status) setRefreshing(true)
     else if (!isManual) setLoading(true)
     const start = Date.now()
     try {
-      const [s, b, u] = await Promise.all([api.status(), api.getBalances(), api.listUsers()])
+      const [s, b, u, m] = await Promise.all([api.status(), api.getBalances(), api.listUsers(), api.getModelsRanking(30, 10).catch(() => ({ models: [], total_requests: 0, total_tokens: 0 }))])
       setStatus(s)
       setBalances(b)
       setUsers(u.users || [])
+      setModelRank(m)
       setErr(null)
     } catch (e: any) {
       if (!status) setErr(e.message || 'Failed to load')
@@ -209,6 +212,31 @@ export default function AdminSystem() {
           )}
         </Tabs>
         <p className="text-xs text-zinc-600 mt-3">Updated: {balances?.time ? new Date(balances.time).toLocaleString() : '-'}</p>
+      </div>
+
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 mb-6">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="font-semibold text-zinc-100">อันดับ Model ยอดนิยม (30 วัน)</h3>
+          <Link to="/models" className="text-xs text-[var(--primary-color)] hover:underline">ดูทั้งหมด →</Link>
+        </div>
+        {!modelRank || modelRank.models.length === 0 ? (
+          <p className="text-sm text-zinc-500">ยังไม่มีการใช้งาน</p>
+        ) : (
+          <>
+            <div className="space-y-2 mb-3">
+              {modelRank.models.slice(0, 5).map((r: any) => (
+                <div key={r.model} className="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2">
+                  <span className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold ${r.rank === 1 ? 'bg-yellow-500/20 text-yellow-400' : r.rank === 2 ? 'bg-zinc-400/20 text-zinc-300' : r.rank === 3 ? 'bg-amber-700/30 text-amber-400' : 'bg-zinc-800 text-zinc-500'}`}>{r.rank}</span>
+                  <span className="flex-1 font-mono text-xs text-zinc-200 truncate" title={r.model}>{r.model}</span>
+                  <span className="text-xs text-zinc-400 tabular-nums">{r.requests.toLocaleString()} req</span>
+                  <span className="text-xs text-zinc-500 tabular-nums">{r.total_tokens.toLocaleString()} tok</span>
+                  <span className="text-xs text-[var(--primary-color)] w-10 text-right">{r.share_tokens}%</span>
+                </div>
+              ))}
+            </div>
+            <div className="text-xs text-zinc-600">รวม {modelRank.total_requests.toLocaleString()} requests · {modelRank.total_tokens.toLocaleString()} tokens</div>
+          </>
+        )}
       </div>
 
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">

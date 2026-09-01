@@ -45,7 +45,6 @@
 	handle /stripe/* {
 		reverse_proxy backend:8000
 	}
-
 	# SPA: serve existing files, fall back to index.html
 	handle {
 		try_files {path} /index.html

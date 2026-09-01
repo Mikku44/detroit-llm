@@ -374,6 +374,72 @@ async def get_usage_models(
     return {"days": days, "models": models}
 
 
+async def _query_models_ranking(db: AsyncSession, days: int, limit: int):
+    if days < 1:
+        days = 1
+    if days > 365:
+        days = 365
+    if limit < 1:
+        limit = 1
+    if limit > 100:
+        limit = 100
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    cutoff = now_naive - timedelta(days=days)
+    stmt = (
+        select(
+            UsageLog.model.label("model"),
+            func.count(UsageLog.id).label("requests"),
+            func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
+            func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
+            func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+            func.count(func.distinct(ApiKey.user_id)).label("unique_users"),
+        )
+        .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
+        .where(UsageLog.created_at >= cutoff)
+        .group_by(UsageLog.model)
+        .order_by(func.sum(UsageLog.total_tokens).desc())
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    rows = result.fetchall()
+    total_stmt = select(
+        func.count(UsageLog.id).label("total_requests"),
+        func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+    ).where(UsageLog.created_at >= cutoff)
+    total_row = (await db.execute(total_stmt)).one()
+    total_requests = int(total_row.total_requests or 0)
+    grand_tokens = int(total_row.total_tokens or 0)
+    models = []
+    for idx, r in enumerate(rows, start=1):
+        req = int(r.requests)
+        tok = int(r.total_tokens or 0)
+        models.append(
+            {
+                "rank": idx,
+                "model": r.model or "unknown",
+                "requests": req,
+                "prompt_tokens": int(r.prompt_tokens or 0),
+                "completion_tokens": int(r.completion_tokens or 0),
+                "total_tokens": tok,
+                "unique_users": int(r.unique_users or 0),
+                "share_requests": round(req / total_requests * 100, 2) if total_requests else 0,
+                "share_tokens": round(tok / grand_tokens * 100, 2) if grand_tokens else 0,
+            }
+        )
+    return {"days": days, "total_requests": total_requests, "total_tokens": grand_tokens, "models": models}
+
+
+@router.get("/models/ranking")
+async def get_models_ranking(
+    days: int = 30,
+    limit: int = 50,
+    user_id: str = Depends(require_session),
+    db: AsyncSession = Depends(get_db),
+):
+    await _require_owner(user_id, db)
+    return await _query_models_ranking(db, days, limit)
+
+
 @router.get("/users")
 async def list_users(
     user_id: str = Depends(require_session),

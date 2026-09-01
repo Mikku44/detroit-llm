@@ -14,6 +14,7 @@ import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '.
 import { useChartZoom } from '../lib/useChartZoom'
 import ApiKeyButtons from '../components/ApiKeyButtons'
 import { Skeleton } from '../components/ui/skeleton'
+import { WhatsNewDialog } from '../components/WhatsNew'
 import { Tooltip as UiTooltip, TooltipTrigger as UiTooltipTrigger, TooltipContent as UiTooltipContent } from '../components/ui/tooltip'
 import { CursorTooltip } from '../components/ui/cursor-tooltip'
 
@@ -139,7 +140,8 @@ export default function Dashboard() {
             {now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
           </p>
         </div>
-        <div className="flex items-center">
+        <div className="flex items-center gap-2">
+          <WhatsNewDialog />
           <ApiKeyButtons />
           <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
             <SelectTrigger className="w-44 h-11 rounded-2xl bg-zinc-900 border-zinc-700 text-sm text-zinc-200">
