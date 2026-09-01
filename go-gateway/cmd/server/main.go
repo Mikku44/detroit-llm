@@ -11,6 +11,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -25,9 +26,18 @@ import (
 	"detroit-llm/go-gateway/internal/ratelimit"
 )
 
+var (
+	healthCacheMu  sync.Mutex
+	healthCacheOK  bool
+	healthCacheAt  time.Time
+	healthCacheTTL = 5 * time.Second
+)
+
 func main() {
 	cfg := config.Load()
 	limiter := ratelimit.New(cfg.RateLimitPerMinute, time.Minute)
+	healthLimiter := ratelimit.New(30, time.Minute)
+	authLimiter := ratelimit.New(20, time.Minute)
 	backendURL := cfg.BackendURL
 	sglangURL := cfg.SGLangURL
 
@@ -62,13 +72,25 @@ func main() {
 	r.Use(gatewayHeader)
 	r.Use(cors(cfg.DashboardURL))
 
-	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
+	r.With(rateLimitMiddleware(healthLimiter)).Get("/health", func(w http.ResponseWriter, req *http.Request) {
 		setHandlerHeader(w, "health")
-		sglangOK := false
-		client := &http.Client{Timeout: 3 * time.Second}
-		if resp, err := client.Get(sglangURL + "/health"); err == nil {
-			sglangOK = resp.StatusCode == 200
-			resp.Body.Close()
+		healthCacheMu.Lock()
+		cached := time.Since(healthCacheAt) < healthCacheTTL
+		cachedOK := healthCacheOK
+		healthCacheMu.Unlock()
+		sglangOK := cachedOK
+		if !cached {
+			client := &http.Client{Timeout: 1 * time.Second}
+			if resp, err := client.Get(sglangURL + "/health"); err == nil {
+				sglangOK = resp.StatusCode == 200
+				resp.Body.Close()
+				healthCacheMu.Lock()
+				healthCacheOK = sglangOK
+				healthCacheAt = time.Now()
+				healthCacheMu.Unlock()
+			} else if cached {
+				sglangOK = cachedOK
+			}
 		}
 		w.Header().Set("X-Served-By", "go-edge/health")
 		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "sglang": sglangOK, "gateway": "go-edge"})
@@ -120,32 +142,37 @@ func main() {
 		})
 	})
 
-	// Admin read path migrated to Go (with fallback)
+	// Admin read path migrated to Go (with fallback) - rate limited
 	if pool != nil {
-		r.Get("/admin/status", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-go"); admin.StatusHandler(cfg, pool).ServeHTTP(w, r) })
-		r.Get("/admin/balances", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-fallback"); admin.BalancesHandler(cfg, pool).ServeHTTP(w, r) })
-		r.Get("/admin/usage", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-fallback"); admin.UsageHandler(cfg, pool).ServeHTTP(w, r) })
-		r.Get("/admin/usage/*", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-fallback"); admin.UsageHandler(cfg, pool).ServeHTTP(w, r) })
+		r.With(rateLimitMiddleware(limiter)).Get("/admin/status", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-go"); admin.StatusHandler(cfg, pool).ServeHTTP(w, r) })
+		r.With(rateLimitMiddleware(limiter)).Get("/admin/balances", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-fallback"); admin.BalancesHandler(cfg, pool).ServeHTTP(w, r) })
+		r.With(rateLimitMiddleware(limiter)).Get("/admin/usage", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-fallback"); admin.UsageHandler(cfg, pool).ServeHTTP(w, r) })
+		r.With(rateLimitMiddleware(limiter)).Get("/admin/usage/*", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "admin-fallback"); admin.UsageHandler(cfg, pool).ServeHTTP(w, r) })
 	}
-	// Conversations migrated to Go (pg-only, fallback on decrypt fail or sqlite)
+	// Conversations migrated to Go (pg-only, fallback on decrypt fail or sqlite) - rate limited
 	if convPool != nil {
-		r.Get("/api/conversations", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.ListHandler(cfg, pool, convPool).ServeHTTP(w, r) })
-		r.Get("/api/conversations/{conversation_id}", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.GetHandler(cfg, pool, convPool).ServeHTTP(w, r) })
-		r.Get("/api/conversations/{conversation_id}/messages", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.GetHandler(cfg, pool, convPool).ServeHTTP(w, r) })
-		r.Delete("/api/conversations/{conversation_id}", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.DeleteHandler(cfg, pool, convPool).ServeHTTP(w, r) })
-		r.Delete("/api/conversations/{id}", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.DeleteHandler(cfg, pool, convPool).ServeHTTP(w, r) })
+		r.With(rateLimitMiddleware(limiter)).Get("/api/conversations", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.ListHandler(cfg, pool, convPool).ServeHTTP(w, r) })
+		r.With(rateLimitMiddleware(limiter)).Get("/api/conversations/{conversation_id}", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.GetHandler(cfg, pool, convPool).ServeHTTP(w, r) })
+		r.With(rateLimitMiddleware(limiter)).Get("/api/conversations/{conversation_id}/messages", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.GetHandler(cfg, pool, convPool).ServeHTTP(w, r) })
+		r.With(rateLimitMiddleware(limiter)).Delete("/api/conversations/{conversation_id}", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.DeleteHandler(cfg, pool, convPool).ServeHTTP(w, r) })
+		r.With(rateLimitMiddleware(limiter)).Delete("/api/conversations/{id}", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "conversations-go"); convpkg.DeleteHandler(cfg, pool, convPool).ServeHTTP(w, r) })
 	}
-	// Ensure mutating conversation routes always reach Python when Go has no handler
-	r.Post("/api/conversations", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
-	r.Post("/api/conversations/{conversation_id}/messages", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
-	r.Put("/api/conversations/{conversation_id}", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
+	// Ensure mutating conversation routes always reach Python when Go has no handler - rate limited
+	r.With(rateLimitMiddleware(limiter)).Post("/api/conversations", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
+	r.With(rateLimitMiddleware(limiter)).Post("/api/conversations/{conversation_id}/messages", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
+	r.With(rateLimitMiddleware(limiter)).Put("/api/conversations/{conversation_id}", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
+	r.With(rateLimitMiddleware(limiter)).Post("/api/conversations/{conversation_id}/messages/{message_id}/reaction", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "proxy-fallback"); forwardToBackend(w, req, backendURL) })
 
-	// Web chat — inject image_gen for z-image-turbo so /chat creates images even without toggle
-	r.HandleFunc("/api/web/chat/completions", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "web-chat-go"); chat.HandleWebChatCompletions(cfg).ServeHTTP(w, r) })
-	r.HandleFunc("/api/web/chat/*", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "web-chat-go"); chat.HandleWebChatCompletions(cfg).ServeHTTP(w, r) })
+	// Web chat — rate limited (expensive LLM)
+	r.With(rateLimitMiddleware(limiter)).HandleFunc("/api/web/chat/completions", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "web-chat-go"); chat.HandleWebChatCompletions(cfg).ServeHTTP(w, r) })
+	r.With(rateLimitMiddleware(limiter)).HandleFunc("/api/web/chat/*", func(w http.ResponseWriter, r *http.Request) { setHandlerHeader(w, "web-chat-go"); chat.HandleWebChatCompletions(cfg).ServeHTTP(w, r) })
 
-	// Fallback everything else to Python backend
-	r.HandleFunc("/*", func(w http.ResponseWriter, req *http.Request) {
+	// Auth & Stripe — strict limit (20/m) to prevent OAuth/Stripe abuse
+	r.With(rateLimitMiddleware(authLimiter)).HandleFunc("/auth/*", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "auth-fallback"); forwardToBackend(w, req, backendURL) })
+	r.With(rateLimitMiddleware(authLimiter)).HandleFunc("/stripe/*", func(w http.ResponseWriter, req *http.Request) { setHandlerHeader(w, "stripe-fallback"); forwardToBackend(w, req, backendURL) })
+
+	// Fallback everything else to Python backend - rate limited
+	r.With(rateLimitMiddleware(limiter)).HandleFunc("/*", func(w http.ResponseWriter, req *http.Request) {
 		setHandlerHeader(w, "proxy-fallback")
 		forwardToBackend(w, req, backendURL)
 	})

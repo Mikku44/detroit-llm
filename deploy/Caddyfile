@@ -4,52 +4,97 @@
 }
 
 {$DOMAIN:chat.khain.app} {
-    encode gzip
-    root * /srv
+	encode gzip
+	root * /srv
+	rate_limit {
+		zone static {
+			key {remote_host}
+			window 1m
+			events 60
+		}
+		zone health {
+			key {remote_host}
+			window 1m
+			events 30
+		}
+		zone auth {
+			key {remote_host}
+			window 1m
+			events 20
+		}
+	}
 
-    handle /v1/* {
-        reverse_proxy go-gateway:8080 {
-            lb_try_duration 2s
-            lb_try_interval 100ms
-        }
-    }
+	handle /v1/* {
+		rate_limit {
+			zone static
+		}
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+			lb_try_interval 100ms
+		}
+	}
 
-    handle /health {
-        reverse_proxy go-gateway:8080 {
-            lb_try_duration 2s
-        }
-    }
+	handle /health {
+		rate_limit {
+			zone health
+		}
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+		}
+	}
 
-    handle /admin/* {
-        reverse_proxy go-gateway:8080 {
-            lb_try_duration 2s
-            lb_try_interval 100ms
-        }
-    }
+	handle /admin/* {
+		rate_limit {
+			zone static
+		}
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+			lb_try_interval 100ms
+		}
+	}
 
-    handle /api/conversations* {
-        reverse_proxy go-gateway:8080 {
-            lb_try_duration 2s
-        }
-    }
+	handle /api/conversations* {
+		rate_limit {
+			zone static
+		}
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+		}
+	}
 
-    handle /api/web/* {
-        reverse_proxy go-gateway:8080 {
-            lb_try_duration 2s
-        }
-    }
+	handle /api/web/* {
+		rate_limit {
+			zone static
+		}
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+		}
+	}
 
-    handle /api/* {
-        reverse_proxy backend:8000
-    }
+	handle /api/* {
+		rate_limit {
+			zone static
+		}
+		reverse_proxy backend:8000
+	}
 
-    handle /auth/* {
-        reverse_proxy backend:8000
-    }
+	handle /auth/* {
+		rate_limit {
+			zone auth
+		}
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+		}
+	}
 
-    handle /stripe/* {
-        reverse_proxy backend:8000
-    }
+	handle /stripe/* {
+		rate_limit {
+			zone auth
+		}
+		reverse_proxy go-gateway:8080 {
+			lb_try_duration 2s
+		}
+	}
 
     handle {
         try_files {path} /index.html

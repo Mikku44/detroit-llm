@@ -9,7 +9,11 @@ RUN npm install
 COPY dashboard/ ./
 RUN npm run build
 
-# ---- Stage 2: caddy serves the static site ----
+# ---- Stage 2: caddy with rate-limit plugin ----
+FROM caddy:2-builder AS caddy-builder
+RUN xcaddy build --with github.com/mholt/caddy-ratelimit
+
 FROM caddy:2-alpine
+COPY --from=caddy-builder /usr/bin/caddy /usr/bin/caddy
 COPY deploy/Caddyfile /etc/caddy/Caddyfile
 COPY --from=frontend /build/dashboard/dist /srv

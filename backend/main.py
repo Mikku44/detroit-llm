@@ -20,6 +20,9 @@ from backend.stripe.router import router as stripe_router
 from backend.ratelimit import SlidingWindowRateLimiter, bucket_key_for_token
 
 rate_limiter = SlidingWindowRateLimiter(limit=settings.rate_limit_per_minute)
+health_limiter = SlidingWindowRateLimiter(limit=30, window_seconds=60)
+auth_limiter = SlidingWindowRateLimiter(limit=20, window_seconds=60)
+_health_cache: dict = {"ok": False, "at": 0.0}
 
 
 @asynccontextmanager
@@ -75,7 +78,15 @@ async def gateway_header_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    if request.url.path.startswith("/v1/"):
+    path = request.url.path
+    limiter = None
+    if path.startswith("/v1/"):
+        limiter = rate_limiter
+    elif path.startswith(("/health", "/admin/", "/api/")):
+        limiter = health_limiter
+    elif path.startswith(("/auth/", "/stripe/")):
+        limiter = auth_limiter
+    if limiter is not None:
         token = ""
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
@@ -83,7 +94,7 @@ async def rate_limit_middleware(request: Request, call_next):
         else:
             token = (request.headers.get("x-api-key") or "").strip()
         key = bucket_key_for_token(token) if token else f"ip:{request.client.host if request.client else 'unknown'}"
-        allowed, retry_after = rate_limiter.check(key)
+        allowed, retry_after = limiter.check(key)
         if not allowed:
             return JSONResponse(
                 content={"detail": "Rate limit exceeded. Try again later."},
@@ -105,11 +116,16 @@ app.include_router(stripe_router)
 async def health():
     from backend.http import get_fetch_client
 
-    sglang_ok = False
+    now = time.monotonic()
+    if now - _health_cache["at"] < 5:
+        return {"status": "ok", "sglang": _health_cache["ok"], "members_url": settings.members_url, "gateway": "fastapi"}
+    sglang_ok = _health_cache["ok"]
     try:
-        client = get_fetch_client(timeout=5)
+        client = get_fetch_client(timeout=1)
         r = await client.get(f"{settings.sglang_url}/health")
         sglang_ok = r.status_code == 200
+        _health_cache["ok"] = sglang_ok
+        _health_cache["at"] = now
     except Exception:
         pass
     return {"status": "ok", "sglang": sglang_ok, "members_url": settings.members_url, "gateway": "fastapi"}
