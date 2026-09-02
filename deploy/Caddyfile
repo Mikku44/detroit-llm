@@ -4,97 +4,107 @@
 }
 
 {$DOMAIN:chat.khain.app} {
-	encode gzip
-	root * /srv
-	rate_limit {
-		zone static {
-			key {remote_host}
-			window 1m
-			events 60
-		}
-		zone health {
-			key {remote_host}
-			window 1m
-			events 30
-		}
-		zone auth {
-			key {remote_host}
-			window 1m
-			events 20
-		}
-	}
+    encode gzip
+    root * /srv
 
-	handle /v1/* {
-		rate_limit {
-			zone static
-		}
-		reverse_proxy go-gateway:8080 {
-			lb_try_duration 2s
-			lb_try_interval 100ms
-		}
-	}
+    # ============================================================
+    # Rate limiting
+    # ============================================================
+    rate_limit {
+        # General API endpoints
+        zone static {
+            match {
+                path /v1/* /admin/* /api/conversations* /api/web/* /api/*
+            }
+            key {remote_host}
+            window 1m
+            events 60
+        }
 
-	handle /health {
-		rate_limit {
-			zone health
-		}
-		reverse_proxy go-gateway:8080 {
-			lb_try_duration 2s
-		}
-	}
+        # Health check
+        zone health {
+            match {
+                path /health
+            }
+            key {remote_host}
+            window 1m
+            events 30
+        }
 
-	handle /admin/* {
-		rate_limit {
-			zone static
-		}
-		reverse_proxy go-gateway:8080 {
-			lb_try_duration 2s
-			lb_try_interval 100ms
-		}
-	}
+        # Authentication / payment endpoints
+        zone auth {
+            match {
+                path /auth/* /stripe/*
+            }
+            key {remote_host}
+            window 1m
+            events 20
+        }
+    }
 
-	handle /api/conversations* {
-		rate_limit {
-			zone static
-		}
-		reverse_proxy go-gateway:8080 {
-			lb_try_duration 2s
-		}
-	}
+    # ============================================================
+    # Go Gateway
+    # ============================================================
 
-	handle /api/web/* {
-		rate_limit {
-			zone static
-		}
-		reverse_proxy go-gateway:8080 {
-			lb_try_duration 2s
-		}
-	}
+    handle /v1/* {
+        reverse_proxy go-gateway:8080 {
+            lb_try_duration 2s
+            lb_try_interval 100ms
+        }
+    }
 
-	handle /api/* {
-		rate_limit {
-			zone static
-		}
-		reverse_proxy backend:8000
-	}
+    handle /health {
+        reverse_proxy go-gateway:8080 {
+            lb_try_duration 2s
+        }
+    }
 
-	handle /auth/* {
-		rate_limit {
-			zone auth
-		}
-		reverse_proxy go-gateway:8080 {
-			lb_try_duration 2s
-		}
-	}
+    handle /admin/* {
+        reverse_proxy go-gateway:8080 {
+            lb_try_duration 2s
+            lb_try_interval 100ms
+        }
+    }
 
-	handle /stripe/* {
-		rate_limit {
-			zone auth
-		}
-		reverse_proxy go-gateway:8080 {
-			lb_try_duration 2s
-		}
-	}
+    handle /api/conversations* {
+        reverse_proxy go-gateway:8080 {
+            lb_try_duration 2s
+        }
+    }
+
+    handle /api/web/* {
+        reverse_proxy go-gateway:8080 {
+            lb_try_duration 2s
+        }
+    }
+
+    # ============================================================
+    # FastAPI Backend
+    # ============================================================
+
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # ============================================================
+    # Auth / Stripe
+    # ============================================================
+
+    handle /auth/* {
+        reverse_proxy go-gateway:8080 {
+            lb_try_duration 2s
+        }
+    }
+
+    handle /stripe/* {
+        reverse_proxy go-gateway:8080 {
+            lb_try_duration 2s
+        }
+    }
+
+    # ============================================================
+    # Frontend
+    # ============================================================
 
     handle {
         try_files {path} /index.html
