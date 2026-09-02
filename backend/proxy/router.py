@@ -604,6 +604,69 @@ async def _is_free_user(db: AsyncSession, user_id: str) -> bool:
     return True
 
 
+async def _claude_tier_gate(db: AsyncSession, user_id: str, model: str):
+    if model.lower() not in CLAUDE_EXTRA_MODELS:
+        return
+    from sqlalchemy import select
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=403, detail="Claude models require Dreamer (Extra Claude) ฿99 or higher")
+    if user.is_owner:
+        return
+    rank = TIER_RANK.get((user.tier_id or "").lower(), -1)
+    if rank >= CLAUDE_MIN_TIER_RANK:
+        await _check_claude_output_quota(db, user_id)
+        return
+    raise HTTPException(status_code=403, detail="Claude models require Dreamer (Extra Claude) ฿99 — subscribe via direct payment")
+
+
+def _acquire_claude_concurrent(user_id: str):
+    cnt = _CLAUDE_CONCURRENT.get(user_id, 0)
+    if cnt >= _CLAUDE_CONCURRENT_LIMIT:
+        raise HTTPException(status_code=429, detail="Concurrent limit 2 reached for Claude Extra — wait for current request to finish")
+    _CLAUDE_CONCURRENT[user_id] = cnt + 1
+
+
+def _release_claude_concurrent(user_id: str):
+    cnt = _CLAUDE_CONCURRENT.get(user_id, 0)
+    _CLAUDE_CONCURRENT[user_id] = max(0, cnt - 1)
+
+
+async def _check_claude_output_quota(db: AsyncSession, user_id: str):
+    from sqlalchemy import select, func
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=30)
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    tier_id = (getattr(user, "tier_id", "") or "").lower() if user else ""
+    tier = next((t for t in TIER_OPTIONS if t["id"] == tier_id), None)
+    in_limit = tier.get("input_tokens", 100000) if tier else 100000
+    out_limit = tier.get("output_tokens", 28000) if tier else 28000
+    in_stmt = select(func.coalesce(func.sum(UsageLog.prompt_tokens), 0)).join(ApiKey, UsageLog.api_key_id == ApiKey.id).where(ApiKey.user_id == user_id, UsageLog.created_at >= cutoff, UsageLog.model.in_(list(CLAUDE_EXTRA_MODELS)))
+    out_stmt = select(func.coalesce(func.sum(UsageLog.completion_tokens), 0)).join(ApiKey, UsageLog.api_key_id == ApiKey.id).where(ApiKey.user_id == user_id, UsageLog.created_at >= cutoff, UsageLog.model.in_(list(CLAUDE_EXTRA_MODELS)))
+    in_used = int((await db.execute(in_stmt)).scalar_one() or 0)
+    out_used = int((await db.execute(out_stmt)).scalar_one() or 0)
+    if in_used >= in_limit:
+        raise HTTPException(status_code=403, detail=f"Claude Input quota {in_limit//1000}K/month reached — upgrade or wait for reset")
+    if out_used >= out_limit:
+        raise HTTPException(status_code=403, detail=f"Claude Output quota {out_limit//1000}K/month reached — upgrade or wait for reset")
+
+
+def _wrap_claude_response(resp, user_id: str):
+    if isinstance(resp, StreamingResponse):
+        orig = resp.body_iterator
+        async def _wrapped():
+            try:
+                async for chunk in orig:
+                    yield chunk
+            finally:
+                _release_claude_concurrent(user_id)
+        resp.body_iterator = _wrapped()
+        return resp
+    _release_claude_concurrent(user_id)
+    return resp
+
+
 async def _free_model_gate(db: AsyncSession, user_id: str, body: dict, default_model: str = "deepseek-v4-pro") -> str:
     """Enforce that free-tier users only use free-tier models. Returns the model to use.
 
@@ -612,6 +675,7 @@ async def _free_model_gate(db: AsyncSession, user_id: str, body: dict, default_m
     Vision models (deepseek-v4-flash-vision-exp) require a paid/member tier.
     """
     model = body.get("model", default_model)
+    await _claude_tier_gate(db, user_id, model)
 
     # Vision models are paid/member-only, even though their name contains "flash".
     if model.lower() == "deepseek-v4-flash-vision-exp":
@@ -2492,9 +2556,20 @@ async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: d
 
 
 async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
+    raw = (body.get("model") or "").lower()
+    is_claude = raw in CLAUDE_EXTRA_MODELS
+    if is_claude:
+        _acquire_claude_concurrent(user_id)
     user_sem = await _acquire_llm_slot(user_id)
     try:
-        return await _handle_chat_completions_inner(db, user_id, body)
+        resp = await _handle_chat_completions_inner(db, user_id, body)
+        if is_claude:
+            return _wrap_claude_response(resp, user_id)
+        return resp
+    except Exception:
+        if is_claude:
+            _release_claude_concurrent(user_id)
+        raise
     finally:
         _release_llm_slot(user_sem)
 
@@ -2758,14 +2833,28 @@ async def responses_api(
 
 
 CLAUDE_ALIAS_TO_MODEL = {
+    "claude-haiku-4-5": "deepseek-v4-flash",
+    "claude-sonnet-4-6": "deepseek-v4-pro",
+    "claude-sonnet-5": "deepseek-v4-pro",
+    "claude-fable-5-1": "deepseek-v4-pro",
     "claude-sonnet-4-5": "deepseek-v4-pro",
     "claude-sonnet-4": "deepseek-v4-pro",
     "claude-3-5-sonnet": "deepseek-v4-pro",
-    "claude-haiku-4-5": "deepseek-v4-flash",
     "claude-3-haiku": "deepseek-v4-flash",
     "claude-sonnet-4-20250514": "deepseek-v4-pro",
+    "claude-opus-4-5": "deepseek-v4-pro",
     "stealth/ox-alpha": "glm-5.3-flash",
 }
+
+CLAUDE_EXTRA_MODELS = {"claude-haiku-4-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-fable-5-1"}
+TIER_RANK = {"free": 0, "nomad": 1, "nomad_extra_claude": 2, "dreamer": 3, "dreamer_extra_claude": 4, "entrepreneur": 5, "angel": 6}
+CLAUDE_MIN_TIER_RANK = TIER_RANK["nomad_extra_claude"]
+_CLAUDE_CONCURRENT: dict[str, int] = {}
+_CLAUDE_CONCURRENT_LIMIT = 2
+
+def _anthropic_headers() -> dict:
+    return {"x-api-key": settings.anthropic_api_key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+
 
 def _resolve_model(model: str) -> str:
     """Map Anthropic/Claude model names sent by Claude Code to gateway models."""
@@ -2835,10 +2924,71 @@ async def anthropic_messages(
     body = await request.json()
     if not isinstance(body, dict) or not body:
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
+    raw_claude = (body.get("model") or "").lower()
+    is_claude_raw = raw_claude in CLAUDE_EXTRA_MODELS
     model = _resolve_model(await _free_model_gate(db, user_id, body))
+    is_claude = is_claude_raw or model.lower() in CLAUDE_EXTRA_MODELS
+    if is_claude:
+        _acquire_claude_concurrent(user_id)
     is_stream = body.get("stream", False)
     payload = _anthropic_chat_payload(body)
     fallback_prompt_tokens = fallback_prompt_tokens_for(payload.get("messages") or [])
+    if is_claude and settings.anthropic_api_key:
+        upstream_model = raw_claude
+        if is_stream:
+            async def anthropic_direct_stream():
+                prompt_tokens = 0
+                output_tokens = 0
+                async with httpx.AsyncClient(timeout=300, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+                    async with client.stream("POST", f"{settings.anthropic_api_url}/v1/messages", json=body, headers=_anthropic_headers()) as resp:
+                        async for chunk in resp.aiter_bytes():
+                            try:
+                                txt = chunk.decode(errors="replace")
+                                for line in txt.splitlines():
+                                    if '"usage"' in line or '"input_tokens"' in line:
+                                        try:
+                                            payload_str = line.strip()
+                                            if payload_str.startswith("data:"):
+                                                payload_str = payload_str[5:].strip()
+                                            if payload_str and payload_str != "[DONE]":
+                                                data = json.loads(payload_str)
+                                                u = data.get("usage") or (data.get("message") or {}).get("usage")
+                                                if isinstance(u, dict):
+                                                    if "input_tokens" in u:
+                                                        prompt_tokens = int(u["input_tokens"] or 0)
+                                                    if "output_tokens" in u:
+                                                        output_tokens = int(u["output_tokens"] or 0)
+                                        except Exception:
+                                            pass
+                            except Exception:
+                                pass
+                            yield chunk
+                if not prompt_tokens:
+                    prompt_tokens = fallback_prompt_tokens
+                if not output_tokens:
+                    output_tokens = 0
+                await _log_usage(db, user_id, upstream_model, prompt_tokens, output_tokens)
+            resp = StreamingResponse(_deadline_wrapper(anthropic_direct_stream()), media_type="text/event-stream")
+            return _wrap_claude_response(resp, user_id) if is_claude else resp
+        else:
+            async with httpx.AsyncClient(timeout=60, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+                resp = await client.post(f"{settings.anthropic_api_url}/v1/messages", json=body, headers=_anthropic_headers())
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = {"error": resp.text}
+                usage = data.get("usage") or {}
+                prompt_tokens = usage.get("input_tokens", 0) or fallback_prompt_tokens
+                output_tokens = usage.get("output_tokens", 0)
+                if not output_tokens:
+                    try:
+                        txt = "".join([(c.get("text") or "") for c in data.get("content") or [] if isinstance(c, dict)])
+                        output_tokens = count_text_tokens(txt)
+                    except Exception:
+                        output_tokens = 0
+                await _log_usage(db, user_id, upstream_model, prompt_tokens, output_tokens)
+                r = JSONResponse(content=data, status_code=resp.status_code)
+                return _wrap_claude_response(r, user_id) if is_claude else r
     has_image = _anthropic_has_image(body)
     has_video = _anthropic_has_video(body)
     if has_image or has_video:
@@ -2914,14 +3064,15 @@ async def anthropic_messages(
                 yield _emit_anthropic_message_stop(meta, "stop")
                 await _log_usage(db, user_id, upstream_model, fallback_prompt_tokens, count_text_tokens(MOCK_TEXT))
 
-            return StreamingResponse(mock_anthropic_stream(), media_type="text/event-stream")
+            resp = StreamingResponse(mock_anthropic_stream(), media_type="text/event-stream")
+            return _wrap_claude_response(resp, user_id) if is_claude else resp
 
         await asyncio.sleep(0.3)
         response = _build_anthropic_message(upstream_model, MOCK_TEXT, [], "stop")
         await _log_usage(
             db, user_id, upstream_model, fallback_prompt_tokens, count_text_tokens(MOCK_TEXT)
         )
-        return JSONResponse(
+        resp = JSONResponse(
             content={
                 "id": message_id,
                 "type": "message",
@@ -2937,6 +3088,7 @@ async def anthropic_messages(
             },
             status_code=200,
         )
+        return _wrap_claude_response(resp, user_id) if is_claude else resp
 
     if is_stream:
         async def anthropic_stream():
@@ -3000,13 +3152,15 @@ async def anthropic_messages(
                     completion_tokens = count_text_tokens("".join(meta["output_text"]))
                 await _log_usage(db, user_id, upstream_model, prompt_tokens, completion_tokens)
 
-        return StreamingResponse(_deadline_wrapper(anthropic_stream()), media_type="text/event-stream")
+        resp = StreamingResponse(_deadline_wrapper(anthropic_stream()), media_type="text/event-stream")
+        return _wrap_claude_response(resp, user_id) if is_claude else resp
 
     async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(url, json=payload, headers=headers)
         data = resp.json()
         if resp.status_code >= 400:
-            return JSONResponse(content=data, status_code=resp.status_code)
+            r = JSONResponse(content=data, status_code=resp.status_code)
+            return _wrap_claude_response(r, user_id) if is_claude else r
 
     usage = data.get("usage") or {}
     prompt_tokens = usage.get("prompt_tokens", 0) or fallback_prompt_tokens
@@ -3030,7 +3184,7 @@ async def anthropic_messages(
     response = _build_anthropic_message(upstream_model, content, chat_tool_calls, finish_reason)
     await _log_usage(db, user_id, upstream_model, prompt_tokens, completion_tokens)
 
-    return JSONResponse(
+    r = JSONResponse(
         content={
             "id": message_id,
             "type": "message",
@@ -3046,6 +3200,7 @@ async def anthropic_messages(
         },
         status_code=200,
     )
+    return _wrap_claude_response(r, user_id) if is_claude else r
 
 
 def _chat_choice_finish_from_chunk(chunk: bytes) -> list:
@@ -3752,11 +3907,23 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
     # user may actually call (free tier = flash + glm-5.3-flash). API keys
     # and unauthenticated harness clients still get the full list.
     free_user = False
+    can_see_claude = True
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer "):
         try:
             user_id = await require_session(request)
             free_user = await _is_free_user(db, user_id)
+            if not free_user:
+                from sqlalchemy import select
+                r = await db.execute(select(User).where(User.id == user_id))
+                u = r.scalar_one_or_none()
+                rank = TIER_RANK.get((getattr(u, "tier_id", "") or "").lower(), -1) if u else -1
+                if u and u.is_owner:
+                    can_see_claude = True
+                else:
+                    can_see_claude = rank >= CLAUDE_MIN_TIER_RANK
+                if not can_see_claude:
+                    free_user = False
         except HTTPException:
             free_user = False
     gateway_models = [
@@ -3781,32 +3948,26 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
         {
             "object": "model",
             "type": "model",
-            "id": "claude-sonnet-4-5",
-            "display_name": "claude-sonnet-4-5",
-        },
-        {
-            "object": "model",
-            "type": "model",
             "id": "claude-haiku-4-5",
             "display_name": "claude-haiku-4-5",
         },
         {
             "object": "model",
             "type": "model",
-            "id": "claude-sonnet-4",
-            "display_name": "claude-sonnet-4",
+            "id": "claude-sonnet-4-6",
+            "display_name": "claude-sonnet-4-6",
         },
         {
             "object": "model",
             "type": "model",
-            "id": "claude-3-5-sonnet",
-            "display_name": "claude-3-5-sonnet",
+            "id": "claude-sonnet-5",
+            "display_name": "claude-sonnet-5",
         },
         {
             "object": "model",
             "type": "model",
-            "id": "claude-3-haiku",
-            "display_name": "claude-3-haiku",
+            "id": "claude-fable-5-1",
+            "display_name": "claude-fable-5-1",
         },
         {
             "object": "model",
@@ -3887,8 +4048,10 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             "display_name": "cogview-4-250304",
         },
     ]
+    if not can_see_claude:
+        gateway_models = [m for m in gateway_models if m.get("id") not in CLAUDE_EXTRA_MODELS]
 
-    cache_key = f"models:{free_user}"
+    cache_key = f"models:{free_user}:{can_see_claude}"
     cached = _models_cache.get(cache_key)
     if cached and (time.monotonic() - cached["ts"] < 300):
         data_cached = cached["data"]
@@ -3897,6 +4060,8 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
                 m["display_name"] = re.sub(r"\s*\(.*\)\s*$", "", m["display_name"]).strip() or m.get("id", "")
         if free_user:
             data_cached = [m for m in data_cached if _is_free_tier_model(m.get("id") or "")]
+        if not can_see_claude:
+            data_cached = [m for m in data_cached if m.get("id") not in CLAUDE_EXTRA_MODELS]
         return JSONResponse(content={"object": "list", "data": data_cached})
     upstream = None
     if settings.deepseek_api_key:
@@ -3930,6 +4095,8 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
     _models_cache[cache_key] = {"data": data, "ts": time.monotonic()}
     if free_user:
         data = [m for m in data if _is_free_tier_model(m.get("id") or "")]
+    if not can_see_claude:
+        data = [m for m in data if m.get("id") not in CLAUDE_EXTRA_MODELS]
     return JSONResponse(content={"object": "list", "data": data})
 
 

@@ -163,7 +163,9 @@ func checkTier(ctx context.Context, pool *pgxpool.Pool, userID string) error {
 	}
 	tierLimits := map[string][2]int64{
 		"nomad": {500000, 2170000},
+		"nomad_extra_claude": {90000, 360000},
 		"dreamer": {1000000, 4350000},
+		"dreamer_extra_claude": {32000, 128000},
 		"entrepreneur": {3000000, 13040000},
 		"angel": {10000000, 43450000},
 	}

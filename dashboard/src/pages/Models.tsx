@@ -20,6 +20,10 @@ const MODELS: ModelInfo[] = [
   { id: 'deepseek-v4-pro', tag: 'Flagship', desc: 'DeepSeek V4 Pro — most capable for complex reasoning, coding, production workloads', ctx: '1M', maxOut: '—', tier: 'paid', highlight: true },
   { id: 'deepseek-v4-flash', tag: 'Fast', desc: 'DeepSeek V4 Flash — fastest lightweight for daily Q&A and high-volume tasks', ctx: '1M', maxOut: '—', tier: 'free' },
   { id: 'deepseek-v4-flash-vision-exp', tag: 'Vision', desc: 'DeepSeek V4 Vision (experimental) — image understanding on flash backbone', ctx: '1M', maxOut: '—', tier: 'paid' },
+  { id: 'claude-haiku-4-5', tag: 'Extra Claude', desc: 'Claude Haiku 4.5 — fastest, 100K Input / 28K Output (Dreamer Extra) · 300K/60K (Nomad Extra)', ctx: '200K', maxOut: '28K', tier: 'paid' },
+  { id: 'claude-sonnet-4-6', tag: 'Extra Claude', desc: 'Claude Sonnet 4.6 — balanced reasoning', ctx: '200K', maxOut: '28K', tier: 'paid' },
+  { id: 'claude-sonnet-5', tag: 'Extra Claude', desc: 'Claude Sonnet 5 — flagship', ctx: '200K', maxOut: '28K', tier: 'paid' },
+  { id: 'claude-fable-5-1', tag: 'Extra Claude', desc: 'Claude Fable 5.1 — creative/long-form', ctx: '200K', maxOut: '28K', tier: 'paid' },
   { id: 'qwen3.7-flash', tag: 'Fast', desc: 'Qwen 3.7 Flash — fast with optional thinking mode', ctx: '128K', maxOut: '—', tier: 'free' },
   { id: 'gemini-2.5-flash', tag: 'Vision', desc: 'Gemini 2.5 Flash — native vision text+image', ctx: '1M', maxOut: '—', tier: 'free' },
   { id: 'z-image-turbo', tag: 'Image', desc: 'z-image-turbo (DashScope) — text-to-image generation', ctx: '1024×1024', maxOut: '—', tier: 'paid' },
@@ -112,7 +116,7 @@ export default function Models() {
           <div key={m.id} className={`rounded-xl border p-5 transition-colors ${m.highlight ? 'border-(--primary-color)/40 bg-(--primary-color)/10' : 'border-zinc-800 bg-zinc-900/50 hover:border-zinc-700'}`}>
             <div className="flex items-start justify-between gap-2 mb-2">
               <code className="font-mono text-sm text-zinc-100 truncate">{m.id}</code>
-              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border uppercase tracking-wide ${m.tier==='free' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>{m.tier==='free' ? <FiUnlock size={10}/> : <FiLock size={10}/>}{m.tier}</span>
+              <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium border uppercase tracking-wide ${m.tier==='free' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : m.id.startsWith('claude-') ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'}`}>{m.tier==='free' ? <FiUnlock size={10}/> : <FiLock size={10}/>}{m.id.startsWith('claude-') ? 'extra claude' : m.tier}</span>
             </div>
             <div className="flex items-center gap-2 mb-2">
               <span className="text-[10px] uppercase tracking-wide text-zinc-500">{m.tag}</span>
@@ -153,9 +157,45 @@ export default function Models() {
         {rankRefreshing && <div className="h-0.5 w-full overflow-hidden rounded bg-zinc-800"><div className="h-full w-1/3 bg-[var(--primary-color)] animate-[shimmer_1s_ease-in-out_infinite]" /></div>}
 
         {rankLoading ? (
-          <div className="space-y-3">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-64 w-full" />
+          <div className="space-y-6 animate-pulse">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {[0, 1, 2].map(i => (
+                <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 space-y-3">
+                  <div className="flex items-center gap-3">
+                    <Skeleton className="h-7 w-7 rounded-full bg-zinc-800" />
+                    <Skeleton className="h-4 flex-1 bg-zinc-800" />
+                  </div>
+                  <Skeleton className="h-7 w-32 bg-zinc-800" />
+                  <Skeleton className="h-3 w-40 bg-zinc-800" />
+                  <Skeleton className="h-12 w-full bg-zinc-800/60" />
+                </div>
+              ))}
+            </div>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5 space-y-3">
+              <div className="flex gap-4">
+                <Skeleton className="h-4 w-8 bg-zinc-800" />
+                <Skeleton className="h-4 w-20 bg-zinc-800" />
+                <Skeleton className="h-4 w-16 ml-auto bg-zinc-800" />
+                <Skeleton className="h-4 w-16 bg-zinc-800" />
+                <Skeleton className="h-4 w-20 bg-zinc-800" />
+              </div>
+              <div className="space-y-2 pt-2">
+                {[0, 1, 2, 3, 4, 5].map(i => (
+                  <div key={i} className="flex items-center gap-3 py-2">
+                    <Skeleton className="h-7 w-7 rounded-full bg-zinc-800" />
+                    <Skeleton className="h-4 w-40 bg-zinc-800" />
+                    <Skeleton className="h-4 w-20 ml-auto bg-zinc-800" />
+                    <Skeleton className="h-4 w-20 bg-zinc-800" />
+                    <Skeleton className="h-8 w-24 bg-zinc-800" />
+                    <Skeleton className="h-4 w-12 bg-zinc-800" />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center justify-center gap-2 text-xs text-zinc-500">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-700 border-t-[var(--primary-color)]" />
+              Loading ranking…
+            </div>
           </div>
         ) : rankErr && !rows.length ? (
           <div className="rounded-xl border border-red-900/50 bg-red-950/20 p-6">

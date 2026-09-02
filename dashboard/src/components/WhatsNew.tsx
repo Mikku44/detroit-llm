@@ -19,6 +19,16 @@ export interface UpdateItem {
 
 export const whatsNewItems: UpdateItem[] = [
   {
+    id: "7",
+    title: "Claude Extra — Haiku 4.5 / Sonnet 4.6 / 5 / Fable 5.1",
+    description: "Claude API ตรงผ่าน Anthropic — ต้องแพ็ก Extra Claude (Dreamer Extra 100K Input / 28K Output) concurrent limit 2",
+    tag: "EXTRA",
+    date: "Sep 2, 2026",
+    image: "/whatsnew/claude.jpg",
+    href: "/models",
+    icon: Sparkles,
+  },
+  {
     id: "6",
     title: "Models Ranking — Compare Top Models",
     description: "จัดอันดับโมเดลยอดนิยมตามการใช้งานจริง ดูคะแนนและเลือกโมเดลที่เหมาะกับงานคุณได้ที่หน้า Models",

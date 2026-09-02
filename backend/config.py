@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     z_api_key: str = Field(default="", validation_alias=AliasChoices("Z_API_KEY", "ZAI_API_KEY"))
     z_ai_url: str = "https://api.z.ai/api/paas/v4"
 
+    anthropic_api_key: str = Field(default="", validation_alias=AliasChoices("ANTHROPIC_API_KEY", "ANTHROPIC_KEY", "CLAUDE_API_KEY"))
+    anthropic_api_url: str = "https://api.anthropic.com"
+
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     gemini_url: str = "https://generativelanguage.googleapis.com/v1beta"
@@ -123,6 +126,24 @@ TIER_OPTIONS = [
         "margin": "83.9%",
     },
     {
+        "id": "nomad_extra_claude",
+        "emoji": "🟢",
+        "name": "Nomad (Extra Claude)",
+        "price": "49฿",
+        "net": "34.3฿",
+        "weekly": 90000,
+        "monthly": 360000,
+        "image_quota": 10,
+        "deepseek_cost": "1.95฿",
+        "profit": "32.35฿",
+        "margin": "94.3%",
+        "input_tokens": 300000,
+        "output_tokens": 60000,
+        "concurrent_requests": 2,
+        "direct_only": True,
+        "models": ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-fable-5-1"],
+    },
+    {
         "id": "dreamer",
         "emoji": "🔵",
         "name": "Dreamer",
@@ -134,6 +155,24 @@ TIER_OPTIONS = [
         "deepseek_cost": "11.25฿",
         "profit": "41.25฿",
         "margin": "78.6%",
+    },
+    {
+        "id": "dreamer_extra_claude",
+        "emoji": "🤖",
+        "name": "Dreamer (Extra Claude)",
+        "price": "99฿",
+        "net": "69.3฿",
+        "weekly": 32000,
+        "monthly": 128000,
+        "image_quota": 20,
+        "deepseek_cost": "0.83฿",
+        "profit": "68.47฿",
+        "margin": "98.8%",
+        "input_tokens": 100000,
+        "output_tokens": 28000,
+        "concurrent_requests": 2,
+        "direct_only": True,
+        "models": ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-fable-5-1"],
     },
     {
         "id": "entrepreneur",
