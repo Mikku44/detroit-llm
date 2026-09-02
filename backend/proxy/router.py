@@ -1779,7 +1779,7 @@ async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> d
     if provider == "auto":
         candidates = ("grok", "zai", "dashscope", "unsplash", "loremflickr", "mock")
     elif provider == "grok":
-        candidates = ("grok", "mock")
+        candidates = ("grok", "zai", "dashscope", "mock")
     elif provider == "dashscope":
         candidates = ("dashscope", "mock")
     elif provider == "zai":

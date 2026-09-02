@@ -736,8 +736,7 @@ export default function Chat3() {
         ? model
         : 'deepseek-v4-flash'
       : model
-    const NATIVE_VISION_MODELS = new Set(['deepseek-v4-flash-vision-exp', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-4.5-air', 'glm-4.7-flashx', 'gemini-2.5-flash', 'grok-imagine-image', 'grok-imagine-image-quality', 'grok-4', 'grok-2-image'])
-    const upstreamModel = hasMedia && !NATIVE_VISION_MODELS.has(requestModel) ? (requestModel.startsWith('gemini-') ? requestModel : 'gemini-2.5-flash') : requestModel
+    const upstreamModel = requestModel
     setMessages((m) => [...m, { role: 'user', content: text, attachments, model: requestModel }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
     setBusy(true)
     setIsVision(hasMedia)
@@ -828,10 +827,11 @@ export default function Chat3() {
           const copy = [...m]
           const idx = copy.length - 1
           if (copy[idx]?.role === 'assistant') {
+            const displayModel = _respModel && _respModel !== 'gemini-2.5-flash' ? _respModel : copy[idx].model
             copy[idx] = {
               ...copy[idx],
               durationMs,
-              model: _respModel || copy[idx].model,
+              model: displayModel || copy[idx].model,
               finish_reason: _finishReason,
               usage: _usage || copy[idx].usage,
             }
@@ -888,8 +888,9 @@ export default function Chat3() {
       }
       if (_logAcc) {
         const isErr = _logAcc.includes('⚠️') || /\[13\d{2,3}\]/.test(_logAcc)
+        const displayRespModel = _respModel && _respModel !== 'gemini-2.5-flash' ? _respModel : requestModel
         const userMsg: Msg = { role: 'user', content: text, attachments, model: requestModel }
-        const asstMsg: Msg = { role: 'assistant', content: _logAcc, model: _respModel, usage: _usage, finish_reason: _finishReason, ...(isErr ? { error: true } : {}) }
+        const asstMsg: Msg = { role: 'assistant', content: _logAcc, model: displayRespModel, usage: _usage, finish_reason: _finishReason, ...(isErr ? { error: true } : {}) }
         if (activeId) (appendMessages(activeId, [userMsg, asstMsg]) as Promise<any>).then((inserted: any) => {
           const arr = inserted as any[] | undefined
           if (arr?.length === 2) {

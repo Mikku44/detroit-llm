@@ -65,11 +65,10 @@ class Settings(BaseSettings):
 
     members_url: str = ""
 
-    # Image generation provider: "auto" (grok -> zai -> dashscope -> unsplash -> loremflickr -> mock)
-    # | "grok" (xAI Grok Imagine, needs GROK_API_KEY) — default
-    # | "dashscope" (real AI gen via z-image-turbo, needs DASHSCOPE_API_KEY)
-    # | "unsplash" (needs access key) | "loremflickr" (free) | "mock" (offline)
-    image_provider: str = "grok"
+    # Image generation provider: "auto" (grok -> zai -> dashscope -> unsplash -> loremflickr -> mock) — default
+    # | "grok" (xAI Grok Imagine, needs GROK_API_KEY) | "dashscope" (z-image-turbo)
+    # | "unsplash" | "loremflickr" | "mock"
+    image_provider: str = "auto"
     unsplash_access_key: str = ""
     grok_api_key: str = Field(default="", validation_alias=AliasChoices("GROK_API_KEY", "XAI_API_KEY"))
     grok_api_url: str = "https://api.x.ai/v1"
