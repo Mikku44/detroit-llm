@@ -76,13 +76,13 @@ export const Model: FC = () => {
   return (
     <AssistantRuntimeProvider runtime={runtime}>
       <CloneThreadShell>
-        <ThreadPrimitive.Root className="flex h-full flex-col items-stretch bg-white px-4 text-[#0d0d0d] dark:bg-black dark:text-[#ececec]">
+        <ThreadPrimitive.Root className="flex h-full flex-col items-stretch bg-white px-3 sm:px-4 text-[#0d0d0d] dark:bg-black dark:text-[#ececec]">
           <AuiIf condition={(s) => s.thread.isEmpty}>
             <EmptyState />
           </AuiIf>
 
           <AuiIf condition={(s) => !s.thread.isEmpty}>
-            <ThreadPrimitive.Viewport className="flex grow flex-col gap-8 overflow-y-scroll pt-16">
+            <ThreadPrimitive.Viewport className="flex grow flex-col gap-6 sm:gap-8 overflow-y-auto overscroll-contain pt-12 sm:pt-16">
               <ThreadPrimitive.Messages>
                 {({ message }) => {
                   if (message.composer.isEditing) return <EditComposer />;
@@ -91,10 +91,10 @@ export const Model: FC = () => {
                 }}
               </ThreadPrimitive.Messages>
 
-              <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto mt-auto flex w-full max-w-3xl flex-col gap-2 overflow-visible rounded-t-3xl bg-white pb-2 dark:bg-black">
+              <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto mt-auto flex w-full max-w-3xl flex-col gap-2 overflow-visible rounded-t-2xl sm:rounded-t-3xl bg-white pb-[calc(0.5rem+env(safe-area-inset-bottom))] sm:pb-2 dark:bg-black px-1 sm:px-0">
                 <ThreadScrollToBottom />
                 <Composer placeholder="Ask anything" />
-                <p className="text-center text-xs text-[#5d5d5d] dark:text-[#afafaf]">
+                <p className="text-center text-[11px] sm:text-xs text-[#5d5d5d] dark:text-[#afafaf] px-2">
                   Model can make mistakes. Check important info.
                 </p>
               </ThreadPrimitive.ViewportFooter>
@@ -110,16 +110,14 @@ export default Model;
 
 const ChatLoadingSkeleton: FC = () => {
   return (
-    <div className="flex h-full w-full flex-col items-center justify-between bg-white px-4 pb-6 pt-16 dark:bg-black">
-      {/* Skeleton Header / Empty state placeholder */}
-      <div className="flex w-full max-w-3xl flex-col items-center gap-4 pt-20">
-        <div className="h-8 w-64 animate-pulse rounded-lg bg-gray-200 dark:bg-zinc-800" />
+    <div className="flex h-full w-full flex-col items-center justify-between bg-white px-3 sm:px-4 pb-6 pt-12 sm:pt-16 dark:bg-black">
+      <div className="flex w-full max-w-3xl flex-col items-center gap-4 pt-12 sm:pt-20">
+        <div className="h-8 w-48 sm:w-64 animate-pulse rounded-lg bg-gray-200 dark:bg-zinc-800" />
       </div>
 
-      {/* Skeleton Composer / Input Box */}
       <div className="mx-auto flex w-full max-w-3xl flex-col gap-2">
-        <div className="h-14 w-full animate-pulse rounded-[28px] border border-gray-100 bg-gray-100 dark:border-transparent dark:bg-[#212121]" />
-        <div className="mx-auto h-3 w-48 animate-pulse rounded bg-gray-200 dark:bg-zinc-800" />
+        <div className="h-14 w-full animate-pulse rounded-2xl sm:rounded-[28px] border border-gray-100 bg-gray-100 dark:border-transparent dark:bg-[#212121]" />
+        <div className="mx-auto h-3 w-32 sm:w-48 animate-pulse rounded bg-gray-200 dark:bg-zinc-800" />
       </div>
     </div>
   );
@@ -127,9 +125,9 @@ const ChatLoadingSkeleton: FC = () => {
 
 const EmptyState: FC = () => {
   return (
-    <div className="flex grow flex-col items-center justify-center px-4 pb-[16vh]">
-      <div className="mx-auto flex w-full max-w-3xl flex-col items-stretch gap-6">
-        <h1 className="text-center text-2xl font-normal leading-7 text-[#0d0d0d] dark:text-[#ececec]">
+    <div className="flex grow flex-col items-center justify-center px-3 sm:px-4 pb-[12vh] sm:pb-[16vh]">
+      <div className="mx-auto flex w-full max-w-3xl flex-col items-stretch gap-4 sm:gap-6">
+        <h1 className="text-center text-xl sm:text-2xl font-normal leading-7 text-[#0d0d0d] dark:text-[#ececec] px-2">
           Where should we begin?
         </h1>
         <Composer placeholder="Ask anything" />
@@ -140,7 +138,7 @@ const EmptyState: FC = () => {
 
 const Composer: FC<{ placeholder: string }> = ({ placeholder }) => {
   return (
-    <ComposerPrimitive.Root className="group/composer flex w-full flex-col rounded-[28px] border border-[#e5e5e5] bg-white px-2 py-2 shadow-[0_2px_6px_-2px_rgba(0,0,0,0.05)] focus-within:border-[#d0d0d0] dark:border-transparent dark:bg-[#212121] dark:shadow-[inset_0_0_1px_0_rgba(255,255,255,0.2)] dark:focus-within:border-transparent">
+    <ComposerPrimitive.Root className="group/composer flex w-full flex-col rounded-[20px] sm:rounded-[28px] border border-[#e5e5e5] bg-white px-2 py-2 shadow-[0_2px_6px_-2px_rgba(0,0,0,0.05)] focus-within:border-[#d0d0d0] dark:border-transparent dark:bg-[#212121] dark:shadow-[inset_0_0_1px_0_rgba(255,255,255,0.2)] dark:focus-within:border-transparent">
       <ComposerLogger />
       <AuiIf condition={(s) => s.composer.attachments.length > 0}>
         <div className="flex flex-row flex-wrap gap-2 px-1 pb-2 pt-1">
@@ -167,7 +165,7 @@ const Composer: FC<{ placeholder: string }> = ({ placeholder }) => {
           autoFocus
           placeholder={placeholder}
           rows={1}
-          className="relative z-10 max-h-52 min-h-9 flex-1 resize-none bg-transparent py-1.5 pl-1 pr-2 text-base text-[#0d0d0d] outline-none placeholder:text-[#8e8e8e] dark:text-[#ececec] dark:placeholder:text-[#8e8e8e]"
+          className="relative z-10 max-h-52 min-h-9 flex-1 min-w-0 resize-none bg-transparent py-1.5 pl-1 pr-2 text-[16px] sm:text-base text-[#0d0d0d] outline-none placeholder:text-[#8e8e8e] dark:text-[#ececec] dark:placeholder:text-[#8e8e8e]"
         />
 
         <div className="flex shrink-0 items-center gap-1">
@@ -258,14 +256,14 @@ const ThreadScrollToBottom: FC = () => {
 
 const UserMessage: FC = () => {
   return (
-    <MessagePrimitive.Root className="relative mx-auto flex w-full max-w-3xl flex-col items-end gap-1">
+    <MessagePrimitive.Root className="relative mx-auto flex w-full max-w-3xl flex-col items-end gap-1 px-1 sm:px-0">
       <div className="flex flex-row flex-wrap justify-end gap-2">
         <MessagePrimitive.Attachments
           components={{ Attachment: ModelAttachmentUI }}
         />
       </div>
 
-      <div className="max-w-[70%] rounded-[22px] bg-[#0d0d0d] px-4 py-2.5 leading-6 text-white dark:bg-[#ececec] dark:text-[#0d0d0d]">
+      <div className="max-w-[85%] sm:max-w-[70%] rounded-[18px] sm:rounded-[22px] bg-[#0d0d0d] px-3 sm:px-4 py-2 sm:py-2.5 leading-6 text-sm sm:text-base text-white dark:bg-[#ececec] dark:text-[#0d0d0d] break-words">
         <MessagePrimitive.Parts />
       </div>
 

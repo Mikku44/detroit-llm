@@ -118,33 +118,33 @@ export default function Dashboard() {
   const chartData = range ? usage.slice(range[0], range[1] + 1) : usage
 
   return (
-    <div>
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-        <div>
-          <h2 className="text-2xl font-bold text-zinc-100 flex items-center gap-2 flex-wrap">
+    <div className="w-full min-w-0 overflow-x-hidden">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4 mb-6">
+        <div className="min-w-0">
+          <h2 className="text-xl sm:text-2xl font-bold text-zinc-100 flex items-center gap-2 flex-wrap break-words">
             {greeting(now.getHours())}, {user?.display_name || 'there'}
             {user && (
               user.is_owner ? (
-                <span className="rounded-full bg-yellow-900/50 text-yellow-400 text-xs px-2.5 py-0.5 font-medium">Owner</span>
+                <span className="rounded-full bg-yellow-900/50 text-yellow-400 text-xs px-2.5 py-0.5 font-medium shrink-0">Owner</span>
               ) : user.is_member ? (
-                <span className="rounded-full bg-emerald-900/50 text-emerald-400 text-xs px-2.5 py-0.5 font-medium">{user.tier_id ? `Member · ${user.tier_id}` : 'Member'}</span>
+                <span className="rounded-full bg-emerald-900/50 text-emerald-400 text-xs px-2.5 py-0.5 font-medium shrink-0">{user.tier_id ? `Member · ${user.tier_id}` : 'Member'}</span>
               ) : user.is_paid ? (
-                <span className="rounded-full bg-sky-900/50 text-sky-400 text-xs px-2.5 py-0.5 font-medium">{user.tier_id ?? 'Paid'}</span>
+                <span className="rounded-full bg-sky-900/50 text-sky-400 text-xs px-2.5 py-0.5 font-medium shrink-0">{user.tier_id ?? 'Paid'}</span>
               ) : (
-                <span className="rounded-full bg-zinc-800 text-zinc-500 text-xs px-2.5 py-0.5 font-medium">Free</span>
+                <span className="rounded-full bg-zinc-800 text-zinc-500 text-xs px-2.5 py-0.5 font-medium shrink-0">Free</span>
               )
             )}
           </h2>
-          <p className="text-sm text-zinc-500 mt-0.5">
+          <p className="text-xs sm:text-sm text-zinc-500 mt-0.5 break-words">
             {now.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })} ·{' '}
             {now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
           <WhatsNewDialog />
           <ApiKeyButtons />
           <Select value={String(days)} onValueChange={(v) => setDays(Number(v))}>
-            <SelectTrigger className="w-44 h-11 rounded-2xl bg-zinc-900 border-zinc-700 text-sm text-zinc-200">
+            <SelectTrigger className="w-full sm:w-44 flex-1 sm:flex-none h-11 rounded-2xl bg-zinc-900 border-zinc-700 text-sm text-zinc-200">
               <SelectValue placeholder="Select range" />
             </SelectTrigger>
             <SelectContent>
@@ -156,12 +156,11 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Hero summary cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
         {loading ? (
           <>
             {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
+              <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5">
                 <Skeleton className="h-3 w-24 mb-3" />
                 <Skeleton className="h-8 w-16" />
               </div>
@@ -169,23 +168,23 @@ export default function Dashboard() {
           </>
         ) : (
           <>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-              <div className="text-sm text-zinc-500 mb-1">Total Requests</div>
-              <div className="text-3xl font-bold text-zinc-100">{totals.requests}</div>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
+              <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Total Requests</div>
+              <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">{totals.requests}</div>
             </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-              <div className="text-sm text-zinc-500 mb-1">Total Tokens</div>
-              <div className="text-3xl font-bold text-zinc-100">{totals.tokens.toLocaleString()}</div>
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
+              <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Total Tokens</div>
+              <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">{totals.tokens.toLocaleString()}</div>
             </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-              <div className="text-sm text-zinc-500 mb-1">Avg Tokens / Request</div>
-              <div className="text-3xl font-bold text-zinc-100">
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
+              <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Avg Tokens / Request</div>
+              <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">
                 {totals.requests > 0 ? Math.round(totals.tokens / totals.requests).toLocaleString() : '0'}
               </div>
             </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-              <div className="text-sm text-zinc-500 mb-1">Peak Day (Requests)</div>
-              <div className="text-3xl font-bold text-zinc-100">
+            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
+              <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Peak Day (Requests)</div>
+              <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">
                 {usage.length > 0 ? Math.max(...usage.map((r) => r.requests)) : '0'}
               </div>
             </div>
@@ -193,15 +192,14 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* Activity graph hero section */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-6">
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-6 mb-6 overflow-hidden">
         <Tabs value={activity} onValueChange={(v) => setActivity(v as 'requests' | 'tokens' | 'models')}>
-          <div className="flex items-start justify-between mb-6">
-            <div>
-              <h3 className="text-lg font-semibold text-zinc-100">Activity</h3>
-              <p className="text-sm text-zinc-500">Requests and token usage over time</p>
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-6">
+            <div className="min-w-0">
+              <h3 className="text-base sm:text-lg font-semibold text-zinc-100">Activity</h3>
+              <p className="text-xs sm:text-sm text-zinc-500">Requests and token usage over time</p>
             </div>
-            <TabsList className="h-8 bg-zinc-800/70 text-zinc-400">
+            <TabsList className="h-8 bg-zinc-800/70 text-zinc-400 w-fit max-w-full overflow-x-auto">
               <TabsTrigger value="requests" className="text-xs px-3 py-1 data-[state=active]:bg-(--primary-color)! data-[state=active]:text-(--primary-foreground)! data-[state=active]:shadow-none!">Requests</TabsTrigger>
               <TabsTrigger value="tokens" className="text-xs px-3 py-1 data-[state=active]:bg-(--primary-color)! data-[state=active]:text-(--primary-foreground)! data-[state=active]:shadow-none!">Tokens</TabsTrigger>
               <TabsTrigger value="models" className="text-xs px-3 py-1 data-[state=active]:bg-(--primary-color)! data-[state=active]:text-(--primary-foreground)! data-[state=active]:shadow-none!">Models</TabsTrigger>
@@ -210,14 +208,14 @@ export default function Dashboard() {
 
           <TabsContent value="requests">
             {loading ? (
-              <Skeleton className="h-72 w-full" />
+              <Skeleton className="h-60 sm:h-72 w-full" />
             ) : usage.length === 0 ? (
               <p className="text-zinc-600 text-sm py-12 text-center">No usage data yet.</p>
             ) : (
               <>
                 <div
                   ref={ref}
-                  className="h-72 select-none"
+                  className="h-60 sm:h-72 select-none w-full min-w-0"
                   style={{ cursor: range ? 'grab' : 'zoom-in' }}
                   onMouseDown={onMouseDown}
                   onMouseMove={onMouseMove}
@@ -229,7 +227,7 @@ export default function Dashboard() {
                     <BarChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }} accessibilityLayer={false}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
                       <XAxis dataKey="date" tickFormatter={formatDateLabel} tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} width={30} />
                       <Tooltip
                         contentStyle={TOOLTIP_STYLE}
                         labelStyle={{ color: '#a1a1aa' }}
@@ -248,14 +246,14 @@ export default function Dashboard() {
 
           <TabsContent value="tokens">
             {loading ? (
-              <Skeleton className="h-72 w-full" />
+              <Skeleton className="h-60 sm:h-72 w-full" />
             ) : usage.length === 0 ? (
               <p className="text-zinc-600 text-sm py-12 text-center">No usage data yet.</p>
             ) : (
               <>
                 <div
                   ref={ref}
-                  className="h-72 select-none"
+                  className="h-60 sm:h-72 select-none w-full min-w-0"
                   style={{ cursor: range ? 'grab' : 'zoom-in' }}
                   onMouseDown={onMouseDown}
                   onMouseMove={onMouseMove}
@@ -267,7 +265,7 @@ export default function Dashboard() {
                     <BarChart data={chartData} margin={{ top: 5, right: 10, left: -20, bottom: 5 }} accessibilityLayer={false}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
                       <XAxis dataKey="date" tickFormatter={formatDateLabel} tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} width={30} />
                       <Tooltip
                         contentStyle={TOOLTIP_STYLE}
                         labelStyle={{ color: '#a1a1aa' }}
@@ -286,16 +284,16 @@ export default function Dashboard() {
 
           <TabsContent value="models">
             {loading ? (
-              <Skeleton className="h-72 w-full" />
+              <Skeleton className="h-60 sm:h-72 w-full" />
             ) : models.length === 0 ? (
               <p className="text-zinc-600 text-sm py-12 text-center">No usage data yet.</p>
             ) : (
-              <div className="h-72">
+              <div className="h-60 sm:h-72 w-full min-w-0">
                 <ResponsiveContainer width="100%" height="100%">
                   <BarChart data={models} margin={{ top: 5, right: 10, left: -20, bottom: 5 }} accessibilityLayer={false}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
                     <XAxis dataKey="model" tick={{ fill: '#71717a', fontSize: 11 }} axisLine={false} tickLine={false} interval={0} angle={-25} textAnchor="end" height={60} />
-                    <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} />
+                    <YAxis tick={{ fill: '#71717a', fontSize: 12 }} axisLine={false} tickLine={false} width={30} />
                     <Tooltip
                       contentStyle={TOOLTIP_STYLE}
                       labelStyle={{ color: '#a1a1aa' }}
@@ -310,12 +308,11 @@ export default function Dashboard() {
         </Tabs>
       </div>
 
-      {/* Daily breakdown */}
-      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6">
+      <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-6 overflow-hidden">
         <Tabs value={breakdown} onValueChange={(v) => setBreakdown(v as 'table' | 'punchcard')}>
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-semibold text-zinc-100">Daily Breakdown</h3>
-            <TabsList className="h-8 bg-zinc-800/70 text-zinc-400">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <h3 className="text-base sm:text-lg font-semibold text-zinc-100">Daily Breakdown</h3>
+            <TabsList className="h-8 bg-zinc-800/70 text-zinc-400 w-fit">
               <TabsTrigger value="table" className="text-xs px-3 py-1 data-[state=active]:bg-(--primary-color)! data-[state=active]:text-(--primary-foreground)! data-[state=active]:shadow-none!">Table</TabsTrigger>
               <TabsTrigger value="punchcard" className="text-xs px-3 py-1 data-[state=active]:bg-(--primary-color)! data-[state=active]:text-(--primary-foreground)! data-[state=active]:shadow-none!">Punchcard</TabsTrigger>
             </TabsList>
@@ -329,41 +326,45 @@ export default function Dashboard() {
                 ))}
               </div>
             ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Requests</TableHead>
-                    <TableHead>Prompt Tokens</TableHead>
-                    <TableHead>Completion Tokens</TableHead>
-                    <TableHead>Total</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {usage.map((r) => (
-                    <UiTooltip key={r.date}>
-                      <UiTooltipTrigger asChild>
-                        <TableRow>
-                          <TableCell>{r.date}</TableCell>
-                          <TableCell>{r.requests}</TableCell>
-                          <TableCell>{r.prompt_tokens.toLocaleString()}</TableCell>
-                          <TableCell>{r.completion_tokens.toLocaleString()}</TableCell>
-                          <TableCell>{r.total_tokens.toLocaleString()}</TableCell>
-                        </TableRow>
-                      </UiTooltipTrigger>
-                      <UiTooltipContent>
-                        <div className="flex flex-col gap-0.5">
-                          <div className="font-semibold">{r.date}</div>
-                          <div>Requests: {r.requests}</div>
-                          <div>Prompt: {r.prompt_tokens.toLocaleString()}</div>
-                          <div>Completion: {r.completion_tokens.toLocaleString()}</div>
-                          <div>Total: {r.total_tokens.toLocaleString()}</div>
-                        </div>
-                      </UiTooltipContent>
-                    </UiTooltip>
-                  ))}
-                </TableBody>
-              </Table>
+              <div className="overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0">
+                <div className="min-w-[560px]">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Requests</TableHead>
+                        <TableHead>Prompt Tokens</TableHead>
+                        <TableHead>Completion Tokens</TableHead>
+                        <TableHead>Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {usage.map((r) => (
+                        <UiTooltip key={r.date}>
+                          <UiTooltipTrigger asChild>
+                            <TableRow>
+                              <TableCell>{r.date}</TableCell>
+                              <TableCell>{r.requests}</TableCell>
+                              <TableCell>{r.prompt_tokens.toLocaleString()}</TableCell>
+                              <TableCell>{r.completion_tokens.toLocaleString()}</TableCell>
+                              <TableCell>{r.total_tokens.toLocaleString()}</TableCell>
+                            </TableRow>
+                          </UiTooltipTrigger>
+                          <UiTooltipContent>
+                            <div className="flex flex-col gap-0.5">
+                              <div className="font-semibold">{r.date}</div>
+                              <div>Requests: {r.requests}</div>
+                              <div>Prompt: {r.prompt_tokens.toLocaleString()}</div>
+                              <div>Completion: {r.completion_tokens.toLocaleString()}</div>
+                              <div>Total: {r.total_tokens.toLocaleString()}</div>
+                            </div>
+                          </UiTooltipContent>
+                        </UiTooltip>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
             )}
           </TabsContent>
 
@@ -373,7 +374,8 @@ export default function Dashboard() {
             ) : punchcard.length === 0 ? (
               <p className="text-zinc-600 text-sm">No usage data yet.</p>
             ) : (
-              <div>
+              <div className="overflow-x-auto -mx-4 sm:mx-0 px-4 sm:px-0">
+                <div className="min-w-[640px]">
                 <CursorTooltip
                   containerClassName="flex flex-col gap-[3px]"
                   content={({ day, hour }) => {
@@ -429,6 +431,7 @@ export default function Dashboard() {
                     </div>
                   ))}
                 </CursorTooltip>
+                </div>
                 <div className="mt-3 flex items-center gap-1.5 text-[10px] text-zinc-500">
                   <span>Less</span>
                   {[0, 0.25, 0.5, 0.75, 1].map((t) => (

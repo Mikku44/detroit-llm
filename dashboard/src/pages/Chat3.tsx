@@ -6,6 +6,7 @@ import UpgradeDialog from '../components/UpgradeDialog'
 import { FiSend, FiPlus, FiCopy, FiCheck, FiPaperclip, FiThumbsUp, FiThumbsDown, FiChevronDown, FiZap, FiX, FiArrowRight, FiFileText, FiClock, FiImage, FiSearch } from 'react-icons/fi'
 import { useChatHistory } from '../lib/chat-history'
 import IOSLoading from '../components/ios-loading'
+import { motion, AnimatePresence } from 'motion/react'
 
 interface Cta {
   label: string
@@ -991,29 +992,28 @@ export default function Chat3() {
   return (
     <>
       <style>{`@keyframes slide { 0%{transform:translateX(0)} 20%{transform:translateX(0)} 80%{transform:translateX(calc(-100% + 100px))} 100%{transform:translateX(calc(-100% + 100px))} }`}</style>
-    <div className="flex flex-col flex-1 min-h-0">
-      {/* Top bar */}
-      <div className="flex items-center justify-between mb-2 px-1 shrink-0">
+    <div className="flex flex-col flex-1 min-h-0 -mx-4 sm:mx-0 -mt-4 sm:mt-0">
+      <div className="flex items-center justify-between gap-2 mb-2 px-3 sm:px-1 pt-2 sm:pt-0 shrink-0">
         <button
           onClick={clearChat}
-          className="flex h-10 w-10 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+          className="flex h-9 w-9 sm:h-10 sm:w-10 shrink-0 items-center justify-center rounded-full text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
           title="New chat"
         >
-          <FiPlus size={20} />
+          <FiPlus size={18} />
         </button>
-        <div className="flex items-center gap-2">
-          <div ref={modelRef} className="relative">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 justify-center">
+          <div ref={modelRef} className="relative min-w-0 max-w-[60vw] sm:max-w-none">
             <button
               onClick={() => setModelOpen((o) => !o)}
-              className="flex h-9 items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-4 text-sm text-zinc-300 hover:bg-zinc-800 transition-colors"
+              className="flex h-8 sm:h-9 items-center gap-1.5 sm:gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-3 sm:px-4 text-xs sm:text-sm text-zinc-300 hover:bg-zinc-800 transition-colors min-w-0 max-w-full"
             >
-              <span className="size-2 rounded-full bg-(--primary-color)" />
-              <span className="truncate font-medium">{MODEL_META[model]?.name ?? model}</span>
-              <FiChevronDown size={14} className={`transition-transform ${modelOpen ? 'rotate-180' : ''}`} />
+              <span className="size-2 rounded-full bg-(--primary-color) shrink-0" />
+              <span className="truncate font-medium min-w-0">{MODEL_META[model]?.name ?? model}</span>
+              <FiChevronDown size={12} className={`shrink-0 transition-transform ${modelOpen ? 'rotate-180' : ''}`} />
             </button>
             {modelOpen && (
-            <div className="absolute left-1/2 -translate-x-1/2 sm:left-auto sm:right-0 sm:translate-x-0 top-full z-50 mt-2 w-72 overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 py-1.5 shadow-xl">
-              <div className="max-h-100 overflow-y-auto">
+            <div className="absolute left-1/2 -translate-x-1/2 sm:left-auto sm:right-0 sm:translate-x-0 top-full z-50 mt-2 w-[calc(100vw-1.5rem)] sm:w-72 max-w-[22rem] overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 py-1.5 shadow-xl">
+              <div className="max-h-[60vh] sm:max-h-100 overflow-y-auto overscroll-contain">
               {models.map((m) => {
                 const meta = MODEL_META[m]
                 return (
@@ -1049,7 +1049,7 @@ export default function Chat3() {
                       <span className="line-clamp-3 text-xs text-zinc-500">{meta?.desc}</span>
                       <span className="truncate font-mono text-[10px] text-zinc-600">{m}</span>
                     </span>
-                    {m === model && <FiCheck size={14} className="mt-1 text-(--primary-color)" />}
+                    {m === model && <FiCheck size={14} className="mt-1 text-(--primary-color) shrink-0" />}
                   </button>
                 )
               })}
@@ -1059,40 +1059,39 @@ export default function Chat3() {
           </div>
           <button
             onClick={() => setUpgradeOpen(true)}
-            className="hidden sm:inline-flex h-7 items-center gap-1.5 rounded-full bg-(--primary-color) px-3 text-xs font-medium text-(--primary-foreground) transition-opacity hover:opacity-90"
+            className="hidden sm:inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-(--primary-color) px-3 text-xs font-medium text-(--primary-foreground) transition-opacity hover:opacity-90"
           >
             <FiZap size={12} />
             Upgrade
           </button>
           <button
             onClick={() => setUpgradeOpen(true)}
-            className="sm:hidden flex h-7 w-7 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground)"
+            className="sm:hidden flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground)"
             title="Upgrade"
           >
             <FiZap size={14} />
           </button>
         </div>
-        <div className="w-10" />
+        <div className="w-9 sm:w-10 shrink-0" />
       </div>
 
-      {/* Messages / empty state */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 overscroll-contain scroll-smooth">
         {!historyLoaded ? (
           <div className="h-full flex flex-col items-center justify-center gap-4 px-4">
             <IOSLoading size={40} />
             <p className="text-sm text-zinc-500">Loading conversation…</p>
           </div>
         ) : isEmpty ? (
-          <div className="h-full flex flex-col items-center justify-center gap-8 px-4 pb-10">
-            <h1 className="text-center text-2xl sm:text-3xl font-medium text-zinc-100">
+          <div className="h-full flex flex-col items-center justify-center gap-6 sm:gap-8 px-4 pb-10 pt-6">
+            <h1 className="text-center text-xl sm:text-3xl font-medium text-zinc-100 px-2">
               What can I help with?
             </h1>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full max-w-2xl">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3 w-full max-w-2xl">
               {SUGGESTIONS.map((s) => (
                 <button
                   key={s}
                   onClick={() => send(s)}
-                  className="rounded-2xl border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-left text-sm text-zinc-300 hover:bg-zinc-800/60 transition-colors"
+                  className="rounded-xl sm:rounded-2xl border border-zinc-800 bg-zinc-900/50 px-3 sm:px-4 py-2.5 sm:py-3 text-left text-xs sm:text-sm text-zinc-300 hover:bg-zinc-800/60 transition-colors leading-relaxed"
                 >
                   {s}
                 </button>
@@ -1100,19 +1099,19 @@ export default function Chat3() {
             </div>
           </div>
         ) : (
-          <div className="mx-auto max-w-3xl px-4 py-6 space-y-8">
+          <div className="mx-auto max-w-3xl px-3 sm:px-4 py-4 sm:py-6 space-y-6 sm:space-y-8">
             <div ref={topSentinelRef} className="h-px" />
             {loadingMore && <div className="flex justify-center py-2 text-xs text-zinc-500">Loading older messages…</div>}
             {!hasMore && messages.length > 0 && <div className="text-center text-xs text-zinc-600">Beginning of conversation</div>}
             {messages.map((m, i) => (
-              <div key={i} className={`flex gap-4 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
+              <div key={i} className={`flex gap-2.5 sm:gap-4 ${m.role === 'user' ? 'flex-row-reverse' : ''}`}>
                 <div className="shrink-0">
                   {m.role === 'assistant' ? (
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) text-sm font-bold">
+                    <div className="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) text-xs sm:text-sm font-bold">
                       D
                     </div>
                   ) : (
-                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-zinc-700 text-zinc-200 text-sm font-semibold">
+                    <div className="flex h-7 w-7 sm:h-8 sm:w-8 items-center justify-center rounded-full bg-zinc-700 text-zinc-200 text-xs sm:text-sm font-semibold">
                       Y
                     </div>
                   )}
@@ -1289,10 +1288,9 @@ export default function Chat3() {
         )}
       </div>
 
-      {/* Composer */}
-      <div className="mx-auto w-full max-w-3xl px-4 pb-0 pt-2 shrink-0">
+      <div className="mx-auto w-full max-w-3xl px-2 sm:px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] sm:pb-0 pt-2 shrink-0">
         <div
-          className={`rounded-[26px]  bg-zinc-900 shadow-[0_4px_20px_rgba(0,0,0,0.4)] transition-colors ${
+          className={`rounded-[20px] sm:rounded-[26px] border bg-zinc-900 shadow-[0_4px_20px_rgba(0,0,0,0.4)] transition-colors ${
             dragOver ? 'border-(--primary-color) ring-2 ring-(--primary-color)/30' : 'border-zinc-700 focus-within:border-zinc-500'
           }`}
           onDragEnter={(e) => {
@@ -1322,7 +1320,7 @@ export default function Chat3() {
               ))}
             </div>
           )}
-          <div className="flex items-end gap-2 px-3 py-2">
+          <div className="flex items-end gap-1.5 sm:gap-2 px-2 sm:px-3 py-2">
             <input
               ref={fileInputRef}
               type="file"
@@ -1351,7 +1349,7 @@ export default function Chat3() {
               }}
               rows={1}
               placeholder="Ask anything"
-              className="flex-1 resize-none bg-transparent py-2 text-[15px] text-zinc-100 outline-none placeholder:text-zinc-500"
+              className="flex-1 min-w-0 resize-none bg-transparent py-2 text-[16px] sm:text-[15px] leading-5 text-zinc-100 outline-none placeholder:text-zinc-500"
               style={{ maxHeight: `${Math.round(window.innerHeight * 0.4)}px` }}
             />
             {busy ? (
@@ -1374,11 +1372,11 @@ export default function Chat3() {
             )}
           </div>
         </div>
-        {attachError && <p className="mt-1 text-center text-xs text-red-400">{attachError}</p>}
-        <div className="mt-2 flex items-center justify-center gap-2">
+        {attachError && <p className="mt-1 text-center text-xs text-red-400 px-2">{attachError}</p>}
+        <div className="mt-2 flex items-start gap-2">
           <button
             onClick={compactChat}
-            className="group relative flex h-8 w-8 items-center justify-center rounded-full transition-transform hover:scale-105"
+            className="group relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-transform hover:scale-105 mt-0.5"
             title={nearLimit ? 'Context nearly full — click to compact' : `Context ${Math.round(usageRatio * 100)}% used — click to compact`}
           >
             <svg width="32" height="32" viewBox="0 0 32 32" className="-rotate-90">
@@ -1401,58 +1399,98 @@ export default function Chat3() {
               {Math.round(usageRatio * 100)}%
             </span>
           </button>
-          <button
-            onClick={() => setThinking((t) => !t)}
-            className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors ${
-              thinking
-                ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
-                : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
-            }`}
-            title="Toggle thinking mode"
-          >
-            <FiZap size={12} />
-            {thinking ? 'Thinking On' : 'Thinking Off'}
-          </button>
-          <button
-            onClick={() => setImageGen((v) => !v)}
-            className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors ${
-              imageGen
-                ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
-                : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
-            }`}
-            title="Toggle image generation"
-          >
-            <FiImage size={12} />
-            Image Gen
-          </button>
-          <button
-            onClick={() => setWebSearch((v) => !v)}
-            className={`flex h-8 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors ${
-              webSearch
-                ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
-                : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
-            }`}
-            title="Toggle web search"
-          >
-            <FiSearch size={12} />
-            Web Search
-          </button>
-          <div className="flex items-center gap-0.5 rounded-full border border-zinc-800 bg-zinc-900/50 p-0.5">
-            {(['low', 'high', 'max'] as const).map((e) => (
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none flex-nowrap [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pb-1 -mx-1 px-1">
               <button
-                key={e}
-                onClick={() => setEffort(e)}
-                disabled={!thinking}
-                className={`h-7 rounded-full px-3 text-xs capitalize transition-colors disabled:opacity-40 ${
-                  effort === e && thinking
-                    ? 'bg-(--primary-color) text-(--primary-foreground)'
-                    : 'text-zinc-500 hover:text-zinc-300'
+                onClick={() => setThinking((t) => !t)}
+                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors whitespace-nowrap ${
+                  thinking
+                    ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
+                    : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
                 }`}
-                title={`Reasoning effort: ${e}`}
+                title="Toggle thinking mode"
               >
-                {e}
+                <FiZap size={12} />
+                {thinking ? 'Thinking On' : 'Thinking Off'}
               </button>
-            ))}
+              <button
+                onClick={() => setImageGen((v) => !v)}
+                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors whitespace-nowrap ${
+                  imageGen
+                    ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
+                    : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+                }`}
+                title="Toggle image generation"
+              >
+                <FiImage size={12} />
+                Image Gen
+              </button>
+              <button
+                onClick={() => setWebSearch((v) => !v)}
+                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors whitespace-nowrap ${
+                  webSearch
+                    ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
+                    : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+                }`}
+                title="Toggle web search"
+              >
+                <FiSearch size={12} />
+                Web Search
+              </button>
+              <AnimatePresence initial={false}>
+                {thinking && (
+                  <motion.div
+                    key="effort-inline"
+                    initial={{ width: 0, opacity: 0 }}
+                    animate={{ width: 'auto', opacity: 1 }}
+                    exit={{ width: 0, opacity: 0 }}
+                    transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                    className="hidden sm:flex items-center gap-1 shrink-0 overflow-hidden"
+                  >
+                    <div className="flex items-center gap-0.5 rounded-full border border-zinc-800 bg-zinc-900/50 p-0.5 shrink-0">
+                      {(['low', 'high', 'max'] as const).map((e) => (
+                        <button
+                          key={e}
+                          onClick={() => setEffort(e)}
+                          className={`h-7 rounded-full px-3 text-xs capitalize transition-colors ${effort === e ? 'bg-(--primary-color) text-(--primary-foreground) shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+                          title={`Reasoning effort: ${e}`}
+                        >
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+            <AnimatePresence initial={false}>
+              {thinking && (
+                <motion.div
+                  key="effort-below"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                  className="overflow-hidden sm:hidden"
+                >
+                  <div className="pt-1.5 flex items-center gap-2">
+                    <span className="text-[11px] font-medium tracking-wide text-zinc-500 shrink-0">Effort</span>
+                    <div className="flex items-center gap-0.5 rounded-full border border-zinc-800 bg-zinc-900/50 p-0.5">
+                      {(['low', 'high', 'max'] as const).map((e) => (
+                        <button
+                          key={e}
+                          onClick={() => setEffort(e)}
+                          className={`h-7 rounded-full px-3.5 text-xs capitalize transition-colors ${effort === e ? 'bg-(--primary-color) text-(--primary-foreground) shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+                          title={`Reasoning effort: ${e}`}
+                        >
+                          {e}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
         <p className="mt-2 text-center text-xs text-zinc-600">

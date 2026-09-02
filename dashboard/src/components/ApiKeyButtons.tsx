@@ -3,7 +3,7 @@ import { HiOutlineBookOpen, HiOutlineKey } from 'react-icons/hi2';
 
 export const ApiKeyButtons: React.FC = () => {
   return (
-    <div className="flex items-center gap-3 p-4 ">
+    <div className="flex items-center gap-2 sm:gap-3 p-0 shrink-0">
       {/* Documentation / Book Icon Button */}
       <a
         href="/docs"

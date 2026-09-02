@@ -66,12 +66,21 @@ function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateIt
   const scrollY = useMotionValue(0)
   const lastScrollTime = useRef(0)
   const shouldReduceMotion = useReducedMotion()
+  const [isMobile, setIsMobile] = useState(false)
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 640px)")
+    const onChange = () => setIsMobile(mql.matches)
+    onChange()
+    mql.addEventListener("change", onChange)
+    return () => mql.removeEventListener("change", onChange)
+  }, [])
+  const effectiveHeight = isMobile ? Math.min(cardHeight, 320) : cardHeight
   const totalItems = items.length
   const maxIndex = totalItems - 1
   const FRAME_OFFSET = -28
   const FRAMES_VISIBLE_LENGTH = 3
   const SNAP_DISTANCE = 50
-  const CARD_PADDING = 96
+  const CARD_PADDING = isMobile ? 72 : 96
 
   const clamp = useCallback((val: number, [min, max]: [number, number]) => Math.min(Math.max(val, min), max), [])
 
@@ -104,6 +113,25 @@ function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateIt
     scrollToCard(e.deltaY > 0 ? 1 : -1)
   }, [isScrolling, scrollToCard])
 
+  const touchStartX = useRef<number | null>(null)
+  const touchStartY = useRef<number | null>(null)
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX
+    touchStartY.current = e.touches[0].clientY
+  }, [])
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (touchStartX.current == null || touchStartY.current == null) return
+    const dx = e.changedTouches[0].clientX - touchStartX.current
+    const dy = e.changedTouches[0].clientY - touchStartY.current
+    if (Math.abs(dy) > Math.abs(dx) && Math.abs(dy) > 30) {
+      scrollToCard(dy > 0 ? 1 : -1)
+    } else if (Math.abs(dx) > 30) {
+      scrollToCard(dx < 0 ? 1 : -1)
+    }
+    touchStartX.current = null
+    touchStartY.current = null
+  }, [scrollToCard])
+
   useEffect(() => { scrollY.set(currentIndex * SNAP_DISTANCE) }, [currentIndex, scrollY])
 
   useEffect(() => {
@@ -125,15 +153,17 @@ function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateIt
   }, [currentIndex, items.length, clamp, shouldReduceMotion])
 
   return (
-    <section aria-label="What's new card stack" className={cn("relative mx-auto h-fit w-fit min-w-[300px] max-w-full", className)}>
+    <section aria-label="What's new card stack" className={cn("relative mx-auto h-fit w-full max-w-[340px] min-w-0", className)}>
       <div
         ref={containerRef}
         role="application"
         tabIndex={0}
         aria-label="Scrollable what's new container"
         onKeyDown={handleKeyDown}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
         className="relative h-full w-full outline-none select-none"
-        style={{ minHeight: `${cardHeight + CARD_PADDING}px`, perspective: "1000px", perspectiveOrigin: "center 60%", touchAction: "none" }}
+        style={{ minHeight: `${effectiveHeight + CARD_PADDING}px`, perspective: "1000px", perspectiveOrigin: "center 60%", touchAction: "pan-y" }}
       >
         <button
           aria-label="Previous update"
@@ -170,11 +200,11 @@ function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateIt
               onFocus={() => isActive && setHoveredIndex(i)}
               onBlur={() => setHoveredIndex(null)}
               tabIndex={isActive ? 0 : -1}
-              className="absolute top-1/2 left-1/2 w-[340px] max-w-[92vw] overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-xl"
+              className="absolute top-1/2 left-1/2 w-[min(340px,calc(100vw-2.5rem))] sm:w-[340px] max-w-[340px] overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900 shadow-xl"
               style={{
                 borderWidth: `${2 / t.scale}px`,
                 filter: `blur(${t.blur}px)`,
-                height: `${cardHeight}px`,
+                height: `${effectiveHeight}px`,
                 opacity: t.opacity,
                 pointerEvents: isActive ? "auto" : "none",
                 transformOrigin: "center",
@@ -183,7 +213,7 @@ function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateIt
                 zIndex: t.zIndex,
               }}
             >
-              <div className={cn("flex h-full w-full flex-col overflow-hidden rounded-xl bg-zinc-900 transition-all", isHovered && "shadow-2xl")} style={{ height: `${cardHeight}px` }}>
+              <div className={cn("flex h-full w-full flex-col overflow-hidden rounded-xl bg-zinc-900 transition-all", isHovered && "shadow-2xl")} style={{ height: `${effectiveHeight}px` }}>
                 {isScrolling && isActive && <div className="absolute -top-1 left-1/2 h-1 w-8 -translate-x-1/2 rounded-full bg-[var(--primary-color)] opacity-75" />}
                 <div className="relative w-full flex-1 overflow-hidden bg-zinc-800">
                   <img alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-cover opacity-60" src={item.image} style={{ filter: "blur(24px)", scale: "1.2", pointerEvents: "none" }} />
@@ -261,22 +291,23 @@ export function WhatsNewDialog({ triggerClassName }: { triggerClassName?: string
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
-        <button className={cn("relative flex h-11 items-center gap-2 rounded-2xl border border-zinc-700 bg-zinc-900 px-4 text-sm font-medium text-zinc-200 shadow-sm transition-all hover:bg-zinc-700 active:scale-95", triggerClassName)}>
-          <Bell className="h-5 w-5 stroke-[1.75]" />
-          <span>What's New</span>
+        <button className={cn("relative flex h-10 sm:h-11 items-center gap-1.5 sm:gap-2 rounded-xl sm:rounded-2xl border border-zinc-700 bg-zinc-900 px-3 sm:px-4 text-xs sm:text-sm font-medium text-zinc-200 shadow-sm transition-all hover:bg-zinc-700 active:scale-95 shrink-0", triggerClassName)}>
+          <Bell className="h-4 w-4 sm:h-5 sm:w-5 stroke-[1.75]" />
+          <span className="hidden xs:inline">What's New</span>
+          <span className="xs:hidden">New</span>
           {hasNew && <span className="absolute -top-1 -right-1 h-2.5 w-2.5 rounded-full bg-[var(--primary-color)] ring-2 ring-zinc-900 animate-pulse" />}
           <span className="hidden sm:inline-flex rounded-full bg-[var(--primary-color)] px-1.5 py-0.5 text-[10px] font-bold leading-none text-white">{whatsNewItems.length}</span>
         </button>
       </DialogTrigger>
-      <DialogContent className="w-[calc(100vw-2rem)] sm:w-full sm:max-w-[420px] max-w-[calc(100vw-2rem)] bg-zinc-900 border-zinc-800 p-0 overflow-hidden gap-0">
-        <DialogHeader className="px-6 pt-6 pb-2 text-left">
-          <DialogTitle className="flex items-center gap-2 text-zinc-100">
+      <DialogContent className="w-[calc(100vw-1rem)] sm:w-full sm:max-w-[420px] max-w-[calc(100vw-1rem)] bg-zinc-900 border-zinc-800 p-0 overflow-hidden gap-0 max-h-[90vh] overflow-y-auto">
+        <DialogHeader className="px-4 sm:px-6 pt-4 sm:pt-6 pb-2 text-left">
+          <DialogTitle className="flex items-center gap-2 text-zinc-100 text-base sm:text-lg">
             <AgentAvatar seed="whats-new" size={32} />
             What's New
           </DialogTitle>
           <DialogDescription className="text-zinc-500 text-xs">Latest updates & features — scroll, swipe or use arrow keys</DialogDescription>
         </DialogHeader>
-        <div className="px-4 pb-6">
+        <div className="px-2 sm:px-4 pb-6">
           <WhatsNewStack items={whatsNewItems} cardHeight={360} />
         </div>
       </DialogContent>
@@ -286,13 +317,12 @@ export function WhatsNewDialog({ triggerClassName }: { triggerClassName?: string
 
 export function WhatsNewInline() {
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6">
+    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-6 overflow-hidden">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-zinc-100 flex items-center gap-2"><AgentAvatar seed="whats-new" size={24} /> What's New</h3>
-      
       </div>
       <p className="text-xs text-zinc-500 mb-4">New features and updates — scroll, swipe or arrow keys to navigate</p>
-      <WhatsNewStack items={whatsNewItems} cardHeight={340} className="min-w-[320px]" />
+      <WhatsNewStack items={whatsNewItems} cardHeight={340} className="w-full min-w-0" />
     </div>
   )
 }
