@@ -57,7 +57,7 @@ func HandleChatCompletions(cfg config.Config, pool *pgxpool.Pool) http.HandlerFu
 			forwardToBackend(w, r, cfg.BackendURL)
 			return
 		}
-		isDirect := strings.Contains(model, "deepseek") || strings.HasPrefix(model, "glm-") || model == "" || strings.HasPrefix(model, "claude")
+		isDirect := strings.Contains(model, "deepseek") || strings.HasPrefix(model, "glm-") || model == ""
 		if !isDirect {
 			forwardToBackend(w, r, cfg.BackendURL)
 			return

@@ -2477,6 +2477,12 @@ async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: d
         resp = await _proxy_to_zai(db, user_id, model, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, model, body.get("messages", []))
 
+    if model.lower() in CLAUDE_EXTRA_MODELS:
+        if not settings.anthropic_api_key:
+            raise HTTPException(status_code=503, detail="Claude models require ANTHROPIC_API_KEY. Set it in the server environment.")
+        resp = await _proxy_to_anthropic(db, user_id, model, body, is_stream, fallback_prompt_tokens)
+        return _with_log(resp, user_id, model, body.get("messages", []))
+
     # If a DeepSeek key is configured, proxy to the real DeepSeek API.
     if settings.deepseek_api_key:
         resp = await _proxy_to_deepseek(db, user_id, model, body, is_stream, fallback_prompt_tokens)
@@ -2906,6 +2912,185 @@ def _anthropic_chat_payload(body: dict) -> dict:
     if tool_choice is not None:
         payload["tool_choice"] = tool_choice
     return payload
+
+
+def _openai_to_anthropic_payload(body: dict) -> dict:
+    msgs = body.get("messages") or []
+    system_parts: list[str] = []
+    anth_msgs: list[dict] = []
+    for m in msgs:
+        role = m.get("role")
+        content = m.get("content")
+        if role == "system":
+            if isinstance(content, str) and content:
+                system_parts.append(content)
+            elif isinstance(content, list):
+                for p in content:
+                    if isinstance(p, dict) and p.get("type") == "text" and p.get("text"):
+                        system_parts.append(p["text"])
+            continue
+        if role not in ("user", "assistant"):
+            role = "user"
+        if isinstance(content, str):
+            anth_content = content
+        elif isinstance(content, list):
+            parts: list[dict] = []
+            for part in content:
+                if not isinstance(part, dict):
+                    continue
+                t = part.get("type")
+                if t == "text" and part.get("text"):
+                    parts.append({"type": "text", "text": part["text"]})
+                elif t == "image_url":
+                    url = (part.get("image_url") or {}).get("url") or part.get("url") or ""
+                    if isinstance(url, str) and url.startswith("data:"):
+                        try:
+                            header, b64 = url.split(",", 1)
+                            media_type = header.split(":")[1].split(";")[0] if ":" in header else "image/jpeg"
+                            parts.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": b64}})
+                        except Exception:
+                            pass
+                    elif url:
+                        parts.append({"type": "text", "text": f"[image: {url}]"})
+                elif t == "video_url":
+                    parts.append({"type": "text", "text": "[video]"})
+            if len(parts) == 1 and parts[0].get("type") == "text":
+                anth_content = parts[0]["text"]
+            elif parts:
+                anth_content = parts
+            else:
+                anth_content = ""
+        else:
+            anth_content = str(content) if content is not None else ""
+        tool_calls = m.get("tool_calls")
+        if tool_calls:
+            tc_parts = anth_content if isinstance(anth_content, list) else ([{"type": "text", "text": anth_content}] if anth_content else [])
+            if isinstance(tc_parts, str):
+                tc_parts = [{"type": "text", "text": tc_parts}]
+            for tc in tool_calls:
+                fn = (tc.get("function") or {})
+                tc_parts.append({"type": "tool_use", "id": tc.get("id") or f"toolu_{int(time.time()*1000)}", "name": fn.get("name") or "tool", "input": json.loads(fn.get("arguments") or "{}") if fn.get("arguments") else {}})
+            anth_content = tc_parts
+        tool_call_id = m.get("tool_call_id")
+        if tool_call_id and role == "tool":
+            anth_content = [{"type": "tool_result", "tool_use_id": tool_call_id, "content": anth_content if isinstance(anth_content, str) else json.dumps(anth_content)}]
+            role = "user"
+        anth_msgs.append({"role": role, "content": anth_content})
+    payload: dict = {"model": body.get("model"), "messages": anth_msgs, "stream": bool(body.get("stream", False))}
+    if system_parts:
+        payload["system"] = "\n\n".join(system_parts)
+    if body.get("max_tokens"):
+        payload["max_tokens"] = body["max_tokens"]
+    else:
+        payload["max_tokens"] = 4096
+    for k in ("temperature", "top_p", "top_k"):
+        if body.get(k) is not None:
+            payload[k] = body[k]
+    if body.get("stop"):
+        payload["stop_sequences"] = body["stop"] if isinstance(body["stop"], list) else [body["stop"]]
+    if body.get("stop_sequences"):
+        payload["stop_sequences"] = body["stop_sequences"]
+    return payload
+
+
+async def _proxy_to_anthropic(db: AsyncSession, user_id: str, model: str, body: dict, is_stream: bool, fallback_prompt_tokens: int):
+    anth_payload = _openai_to_anthropic_payload(body)
+    url = f"{settings.anthropic_api_url}/v1/messages"
+    headers = _anthropic_headers()
+    created = int(time.time())
+    completion_id = f"chatcmpl-{int(time.time()*1000)}"
+    if is_stream:
+        async def anth_stream():
+            prompt_tokens = 0
+            output_tokens = 0
+            text_acc = ""
+            try:
+                async with httpx.AsyncClient(timeout=300, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+                    async with client.stream("POST", url, json=anth_payload, headers=headers) as resp:
+                        if resp.status_code >= 400:
+                            err_body = await resp.aread()
+                            msg = _extract_upstream_error_message(err_body, f"Upstream error {resp.status_code}")
+                            yield _sse_error_chunk(f"Anthropic {model}: {msg}", model)
+                            yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                            yield b"data: [DONE]\n\n"
+                            return
+                        yield f'data: {json.dumps({"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None}]})}\n\n'.encode()
+                        buf = ""
+                        cur_event = ""
+                        async for chunk in resp.aiter_bytes():
+                            txt = chunk.decode(errors="replace")
+                            buf += txt
+                            while "\n" in buf:
+                                line, buf = buf.split("\n", 1)
+                                line = line.strip()
+                                if not line:
+                                    cur_event = ""
+                                    continue
+                                if line.startswith("event:"):
+                                    cur_event = line[6:].strip()
+                                    continue
+                                if line.startswith("data:"):
+                                    data_str = line[5:].strip()
+                                    if not data_str:
+                                        continue
+                                    try:
+                                        data = json.loads(data_str)
+                                    except Exception:
+                                        continue
+                                    if cur_event == "content_block_delta":
+                                        delta = data.get("delta") or {}
+                                        if delta.get("type") == "text_delta" and delta.get("text"):
+                                            t = delta["text"]
+                                            text_acc += t
+                                            yield f'data: {json.dumps({"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {"content": t}, "finish_reason": None}]})}\n\n'.encode()
+                                        elif delta.get("type") == "input_json_delta" and delta.get("partial_json"):
+                                            pj = delta["partial_json"]
+                                            text_acc += pj
+                                            yield f'data: {json.dumps({"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {"content": pj}, "finish_reason": None}]})}\n\n'.encode()
+                                    elif cur_event == "message_start":
+                                        msg = data.get("message") or {}
+                                        usage = msg.get("usage") or {}
+                                        if usage.get("input_tokens"):
+                                            prompt_tokens = int(usage["input_tokens"])
+                                    elif cur_event == "message_delta":
+                                        usage = data.get("usage") or {}
+                                        if usage.get("output_tokens"):
+                                            output_tokens = int(usage["output_tokens"])
+                                        delta = data.get("delta") or {}
+                                        if delta.get("stop_reason"):
+                                            pass
+                                    elif cur_event == "message_stop":
+                                        pass
+                        if not output_tokens:
+                            output_tokens = count_text_tokens(text_acc)
+                        if not prompt_tokens:
+                            prompt_tokens = fallback_prompt_tokens
+                        yield f'data: {json.dumps({"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": output_tokens, "total_tokens": prompt_tokens + output_tokens}})}\n\n'.encode()
+                        yield b"data: [DONE]\n\n"
+            finally:
+                if not prompt_tokens:
+                    prompt_tokens = fallback_prompt_tokens
+                if not output_tokens:
+                    output_tokens = count_text_tokens(text_acc)
+                await _log_usage(db, user_id, model, prompt_tokens, output_tokens)
+        return StreamingResponse(_deadline_wrapper(anth_stream()), media_type="text/event-stream")
+    else:
+        async with httpx.AsyncClient(timeout=120, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+            resp = await client.post(url, json=anth_payload, headers=headers)
+            try:
+                data = resp.json()
+            except Exception:
+                data = {"error": resp.text}
+            if resp.status_code >= 400:
+                return JSONResponse(content=data, status_code=resp.status_code)
+            content_parts = data.get("content") or []
+            text = "".join([p.get("text") or "" for p in content_parts if isinstance(p, dict) and p.get("type") == "text"])
+            usage = data.get("usage") or {}
+            prompt_tokens = usage.get("input_tokens", 0) or fallback_prompt_tokens
+            output_tokens = usage.get("output_tokens", 0) or count_text_tokens(text)
+            await _log_usage(db, user_id, model, prompt_tokens, output_tokens)
+            openai_resp = {"id": completion_id, "object": "chat.completion", "created": created, "model": model, "choices": [{"index": 0, "message": {"role": "assistant", "content": text}, "finish_reason": "stop"}], "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": output_tokens, "total_tokens": prompt_tokens + output_tokens}}
+            return JSONResponse(content=openai_resp, status_code=200)
 
 
 @router.post("/v1/messages")

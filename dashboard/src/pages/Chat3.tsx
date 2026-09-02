@@ -65,6 +65,10 @@ const ALLOWED_CHAT_MODELS = new Set([
   'glm-5.3-flash',
   'glm-4.5-air',
   'glm-4.7-flashx',
+  'claude-haiku-4-5',
+  'claude-sonnet-4-6',
+  'claude-sonnet-5',
+  'claude-fable-5-1',
 ])
 
 const MODEL_META: Record<string, ModelMeta> = {
@@ -123,6 +127,26 @@ const MODEL_META: Record<string, ModelMeta> = {
     desc: 'Text + Image — understands images & text',
     badges: ['text', 'image'],
   },
+  'claude-haiku-4-5': {
+    name: 'Claude Haiku 4.5',
+    desc: 'Extra Claude — fastest, 200K context',
+    badges: ['text', 'extra-claude'],
+  },
+  'claude-sonnet-4-6': {
+    name: 'Claude Sonnet 4.6',
+    desc: 'Extra Claude — balanced reasoning',
+    badges: ['text', 'extra-claude'],
+  },
+  'claude-sonnet-5': {
+    name: 'Claude Sonnet 5',
+    desc: 'Extra Claude — flagship reasoning',
+    badges: ['text', 'extra-claude'],
+  },
+  'claude-fable-5-1': {
+    name: 'Claude Fable 5.1',
+    desc: 'Extra Claude — creative / long-form',
+    badges: ['text', 'extra-claude'],
+  },
 }
 
 const BADGE_STYLES: Record<string, string> = {
@@ -132,6 +156,7 @@ const BADGE_STYLES: Record<string, string> = {
   reasoning: 'font-medium bg-violet-500/10 text-violet-400 border border-violet-500/15',
   vision: 'font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/15',
   fast: 'font-medium bg-sky-500/10 text-sky-400 border border-sky-500/15',
+  'extra-claude': 'font-medium bg-violet-500/15 text-violet-400 border border-violet-500/20',
   default: 'font-medium bg-zinc-800/60 text-zinc-500 border border-zinc-700/50',
 }
 
@@ -153,6 +178,10 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'glm-4.5-air': 1000000,
   'glm-4.7-flashx': 1000000,
   'gemini-2.5-flash': 1000000,
+  'claude-haiku-4-5': 200000,
+  'claude-sonnet-4-6': 200000,
+  'claude-sonnet-5': 200000,
+  'claude-fable-5-1': 200000,
 }
 
 const DEFAULT_CONTEXT_LIMIT = 1000000
