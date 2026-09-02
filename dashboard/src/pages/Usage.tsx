@@ -285,37 +285,18 @@ export default function Usage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-        {loading ? (
-          <>
-            {[0, 1, 2].map((i) => (
-              <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-                <Skeleton className="h-3 w-24 mb-3" />
-                <Skeleton className="h-7 w-16" />
-              </div>
-            ))}
-          </>
-        ) : (
-          <>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-              <div className="text-sm text-zinc-500 mb-1">Total Requests</div>
-              <div className="text-2xl font-semibold text-zinc-100 tabular-nums">
-                <NumberTicker end={totals.requests} duration={1.2} />
-              </div>
-            </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-              <div className="text-sm text-zinc-500 mb-1">Total Tokens</div>
-              <div className="text-2xl font-semibold text-zinc-100 tabular-nums">
-                <NumberTicker end={totals.tokens} duration={1.2} />
-              </div>
-            </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-              <div className="text-sm text-zinc-500 mb-1">Avg Tokens / Request</div>
-              <div className="text-2xl font-semibold text-zinc-100 tabular-nums">
-                <NumberTicker end={totals.requests > 0 ? Math.round(totals.tokens / totals.requests) : 0} duration={1.2} />
-              </div>
-            </div>
-          </>
-        )}
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
+          <div className="text-sm text-zinc-500 mb-1">Total Requests</div>
+          {loading ? <Skeleton className="h-7 w-20 rounded-md" /> : <div className="text-2xl font-semibold text-zinc-100 tabular-nums"><NumberTicker end={totals.requests} duration={1.2} /></div>}
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
+          <div className="text-sm text-zinc-500 mb-1">Total Tokens</div>
+          {loading ? <Skeleton className="h-7 w-24 rounded-md" /> : <div className="text-2xl font-semibold text-zinc-100 tabular-nums"><NumberTicker end={totals.tokens} duration={1.2} /></div>}
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
+          <div className="text-sm text-zinc-500 mb-1">Avg Tokens / Request</div>
+          {loading ? <Skeleton className="h-7 w-16 rounded-md" /> : <div className="text-2xl font-semibold text-zinc-100 tabular-nums"><NumberTicker end={totals.requests > 0 ? Math.round(totals.tokens / totals.requests) : 0} duration={1.2} /></div>}
+        </div>
       </div>
 
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-6 mb-8">

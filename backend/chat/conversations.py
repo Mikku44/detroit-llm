@@ -193,6 +193,10 @@ async def get_conversation(
                 limit = 30
         elif not all_flag:
             limit = 30
+        else:
+            limit = 100
+        if all_flag and limit and limit > 100:
+            limit = 100
         if qp.get("before") is not None:
             try:
                 before = int(qp.get("before"))
@@ -212,7 +216,7 @@ async def get_conversation(
     if before is not None:
         q = q.where(ConversationMessage.position < before)
     q = q.order_by(ConversationMessage.position.desc())
-    if limit is not None and not all_flag:
+    if limit is not None:
         q = q.limit(limit)
     msgs = (await db.execute(q)).scalars().all()
     msgs = list(reversed(msgs))
@@ -222,7 +226,7 @@ async def get_conversation(
     oldest = None
     if msgs:
         oldest = msgs[0].position
-        if limit is not None and not all_flag:
+        if limit is not None:
             if before is None:
                 has_more = total > len(msgs)
             else:

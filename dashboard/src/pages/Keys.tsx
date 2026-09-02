@@ -360,9 +360,19 @@ export default function Keys() {
         {loading ? (
           [0, 1, 2].map((i) => (
             <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4">
-              <Skeleton className="h-4 w-32 mb-3" />
-              <Skeleton className="h-4 w-full mb-2" />
-              <Skeleton className="h-3 w-24" />
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="space-y-2">
+                  <Skeleton className="h-4 w-28" />
+                  <Skeleton className="h-5 w-16 rounded-full" />
+                </div>
+                <Skeleton className="h-8 w-8 rounded-md" />
+              </div>
+              <Skeleton className="h-4 w-full mb-3" />
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                <Skeleton className="h-3 w-14" /><Skeleton className="h-3 w-20 ml-auto" />
+                <Skeleton className="h-3 w-14" /><Skeleton className="h-3 w-20 ml-auto" />
+                <Skeleton className="h-3 w-16" /><Skeleton className="h-3 w-16 ml-auto" />
+              </div>
             </div>
           ))
         ) : keys.length === 0 ? (

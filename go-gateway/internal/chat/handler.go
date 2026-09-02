@@ -42,6 +42,7 @@ func isImageModel(model string) bool {
 
 func HandleChatCompletions(cfg config.Config, pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		body, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		var req struct {
@@ -260,6 +261,7 @@ func ensureImageGen(body []byte) []byte {
 
 func HandleWebChatCompletions(cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 		body, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		var req struct {
@@ -275,6 +277,7 @@ func HandleWebChatCompletions(cfg config.Config) http.HandlerFunc {
 }
 
 func forwardToBackend(w http.ResponseWriter, r *http.Request, backendURL string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	body, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	client := &http.Client{Timeout: 300 * time.Second}

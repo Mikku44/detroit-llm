@@ -6,6 +6,9 @@
 {$DOMAIN:chat.khain.app} {
     encode gzip
     root * /srv
+    request_body {
+        max_size 1MB
+    }
 
     # ============================================================
     # Rate limiting

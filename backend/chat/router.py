@@ -1,3 +1,4 @@
+import asyncio
 import json
 from typing import AsyncGenerator
 
@@ -5,6 +6,30 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+
+_CHAT_SEM = asyncio.Semaphore(20)
+_USER_CHAT_SEMS: dict[str, asyncio.Semaphore] = {}
+_USER_CHAT_LOCK = asyncio.Lock()
+
+async def _acquire_chat_slot(user_id: str):
+    await _CHAT_SEM.acquire()
+    async with _USER_CHAT_LOCK:
+        sem = _USER_CHAT_SEMS.get(user_id)
+        if sem is None:
+            sem = asyncio.Semaphore(3)
+            _USER_CHAT_SEMS[user_id] = sem
+    await sem.acquire()
+    return sem
+
+def _release_chat_slot(sem: asyncio.Semaphore):
+    try:
+        sem.release()
+    except Exception:
+        pass
+    try:
+        _CHAT_SEM.release()
+    except Exception:
+        pass
 
 from backend.config import settings
 from backend.auth.session import require_session
@@ -82,47 +107,64 @@ async def chat_stream(
     user_id: str = Depends(require_session),
     db: AsyncSession = Depends(get_db),
 ):
-    body = await request.json()
-    messages = body.get("messages", [])
+    ctype = request.headers.get("content-length")
+    if ctype and ctype.isdigit() and int(ctype) > 1 << 20:
+        raise HTTPException(status_code=413, detail="Payload too large")
+    sem = await _acquire_chat_slot(user_id)
+    try:
+        body = await request.json()
+        if body.get("max_tokens") is not None:
+            try:
+                body["max_tokens"] = min(max(1, int(body["max_tokens"])), 8192)
+            except Exception:
+                body["max_tokens"] = 4096
+        messages = body.get("messages", [])
 
-    if not isinstance(messages, list) or not messages:
-        raise HTTPException(status_code=400, detail="'messages' must be a non-empty list")
+        if not isinstance(messages, list) or not messages:
+            raise HTTPException(status_code=400, detail="'messages' must be a non-empty list")
 
-    model = body.get("model", "google/gemma-4-26B-A4B")
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": body.get("temperature", 0.7),
-        "max_tokens": body.get("max_tokens", 4096),
-        "stream": True,
-    }
+        model = body.get("model", "google/gemma-4-26B-A4B")
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": body.get("temperature", 0.7),
+            "max_tokens": body.get("max_tokens", 4096),
+            "stream": True,
+        }
 
-    prompt_chars = sum(
-        len(m.get("content", ""))
-        for m in messages
-        if isinstance(m, dict) and isinstance(m.get("content"), str)
-    )
-    prompt_tokens = max(1, prompt_chars // 4)
+        prompt_chars = sum(
+            len(m.get("content", ""))
+            for m in messages
+            if isinstance(m, dict) and isinstance(m.get("content"), str)
+        )
+        prompt_tokens = max(1, prompt_chars // 4)
 
-    async def event_stream():
-        completion_chars = 0
-        ok = True
-        try:
-            async for delta in _sglang_text_deltas(payload, request):
-                completion_chars += len(delta)
-                yield delta
-        except Exception as e:
-            ok = False
-            yield f"\n[Error] {e}"
-        finally:
-            if ok:
-                try:
-                    await _log_usage(db, user_id, model, prompt_tokens, max(1, completion_chars // 4))
-                except Exception:
-                    pass
+        async def event_stream():
+            completion_chars = 0
+            ok = True
+            try:
+                async for delta in _sglang_text_deltas(payload, request):
+                    completion_chars += len(delta)
+                    yield delta
+            except Exception as e:
+                ok = False
+                yield f"\n[Error] {e}"
+            finally:
+                _release_chat_slot(sem)
+                if ok:
+                    try:
+                        await _log_usage(db, user_id, model, prompt_tokens, max(1, completion_chars // 4))
+                    except Exception:
+                        pass
 
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/plain; charset=utf-8",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/plain; charset=utf-8",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    except HTTPException:
+        _release_chat_slot(sem)
+        raise
+    except Exception:
+        _release_chat_slot(sem)
+        raise

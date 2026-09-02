@@ -157,39 +157,22 @@ export default function Dashboard() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
-        {loading ? (
-          <>
-            {[0, 1, 2, 3].map((i) => (
-              <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5">
-                <Skeleton className="h-3 w-24 mb-3" />
-                <Skeleton className="h-8 w-16" />
-              </div>
-            ))}
-          </>
-        ) : (
-          <>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
-              <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Total Requests</div>
-              <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">{totals.requests}</div>
-            </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
-              <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Total Tokens</div>
-              <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">{totals.tokens.toLocaleString()}</div>
-            </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
-              <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Avg Tokens / Request</div>
-              <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">
-                {totals.requests > 0 ? Math.round(totals.tokens / totals.requests).toLocaleString() : '0'}
-              </div>
-            </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
-              <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Peak Day (Requests)</div>
-              <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">
-                {usage.length > 0 ? Math.max(...usage.map((r) => r.requests)) : '0'}
-              </div>
-            </div>
-          </>
-        )}
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
+          <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Total Requests</div>
+          {loading ? <Skeleton className="h-8 sm:h-9 w-20 rounded-md" /> : <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">{totals.requests}</div>}
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
+          <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Total Tokens</div>
+          {loading ? <Skeleton className="h-8 sm:h-9 w-24 rounded-md" /> : <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">{totals.tokens.toLocaleString()}</div>}
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
+          <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Avg Tokens / Request</div>
+          {loading ? <Skeleton className="h-8 sm:h-9 w-16 rounded-md" /> : <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">{totals.requests > 0 ? Math.round(totals.tokens / totals.requests).toLocaleString() : '0'}</div>}
+        </div>
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-5 min-w-0">
+          <div className="text-xs sm:text-sm text-zinc-500 mb-1 truncate">Peak Day (Requests)</div>
+          {loading ? <Skeleton className="h-8 sm:h-9 w-14 rounded-md" /> : <div className="text-2xl sm:text-3xl font-bold text-zinc-100 truncate">{usage.length > 0 ? Math.max(...usage.map((r) => r.requests)) : '0'}</div>}
+        </div>
       </div>
 
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-4 sm:p-6 mb-6 overflow-hidden">

@@ -23,7 +23,7 @@ func BucketKey(token string) string {
 		return ""
 	}
 	h := sha256.Sum256([]byte(token))
-	return fmt.Sprintf("key:%x", h[:8])
+	return fmt.Sprintf("key:%x", h[:])
 }
 
 func (l *Limiter) Allow(key string) (bool, int) {

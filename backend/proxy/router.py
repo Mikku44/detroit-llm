@@ -36,6 +36,31 @@ router = APIRouter()
 SGLANG_TIMEOUT = 300
 DEEPSEEK_TIMEOUT = 300
 
+_LLM_SEMAPHORE = asyncio.Semaphore(30)
+_IMAGE_SEMAPHORE = asyncio.Semaphore(8)
+_USER_LLM_SEMAPHORES: dict[str, asyncio.Semaphore] = {}
+_USER_LLM_LOCK = asyncio.Lock()
+
+async def _acquire_llm_slot(user_id: str):
+    await _LLM_SEMAPHORE.acquire()
+    async with _USER_LLM_LOCK:
+        sem = _USER_LLM_SEMAPHORES.get(user_id)
+        if sem is None:
+            sem = asyncio.Semaphore(3)
+            _USER_LLM_SEMAPHORES[user_id] = sem
+    await sem.acquire()
+    return sem
+
+def _release_llm_slot(sem: asyncio.Semaphore):
+    try:
+        sem.release()
+    except Exception:
+        pass
+    try:
+        _LLM_SEMAPHORE.release()
+    except Exception:
+        pass
+
 # DeepSeek-only chat params that Gemini's OpenAI-compatible endpoint may reject.
 GEMINI_STRIP_KEYS = ("reasoning", "output_config", "reasoning_effort", "thinking")
 
@@ -2302,13 +2327,18 @@ async def web_chat_completions(
     return await _handle_chat_completions(db, user_id, body)
 
 
-async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
+async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: dict):
     model = await _free_model_gate(db, user_id, body)
     is_stream = body.get("stream", False)
     fallback_prompt_tokens = count_messages_tokens(body.get("messages") or [])
     created_time = int(time.time())
 
     _apply_max_tokens(body, model)
+    if body.get("max_tokens") is not None:
+        try:
+            body["max_tokens"] = min(int(body["max_tokens"]), 8192)
+        except Exception:
+            body["max_tokens"] = 4096
 
     # Custom gateway flags — pop them so they never reach an upstream provider.
     image_gen = bool(body.get("image_gen"))
@@ -2461,6 +2491,14 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
         )
 
 
+async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
+    user_sem = await _acquire_llm_slot(user_id)
+    try:
+        return await _handle_chat_completions_inner(db, user_id, body)
+    finally:
+        _release_llm_slot(user_sem)
+
+
 # ---------------------------------------------------------------------------
 # Mock image generation (placeholder SVG, no upstream API required)
 # ---------------------------------------------------------------------------
@@ -2566,12 +2604,13 @@ async def image_generations(
 
     if not prompt:
         raise HTTPException(status_code=400, detail="prompt is required")
-    if n < 1 or n > 10:
-        raise HTTPException(status_code=400, detail="n must be between 1 and 10")
+    if n < 1 or n > 4:
+        raise HTTPException(status_code=400, detail="n must be between 1 and 4")
 
-    # Enforce the per-tier monthly image quota.
     quota, used = await _image_quota_for_user(db, user_id)
-    count = min(n, 4)
+    is_free = await _is_free_user(db, user_id)
+    max_per_req = 1 if is_free else 2
+    count = min(n, max_per_req)
     if quota <= 0:
         raise HTTPException(
             status_code=403,
@@ -2585,12 +2624,14 @@ async def image_generations(
                 f"requesting {count}). Upgrade to a higher tier for more images."
             ),
         )
-
+    if _IMAGE_SEMAPHORE.locked():
+        raise HTTPException(status_code=429, detail="Image generation busy, try again later")
     created_time = int(time.time())
     refs = []
-    for i in range(count):
-        seed_text = f"{prompt}|{model}|{size}|{i}"
-        refs.append((seed_text, await _image_source(prompt, model, size, seed_text)))
+    async with _IMAGE_SEMAPHORE:
+        for i in range(count):
+            seed_text = f"{prompt}|{model}|{size}|{i}"
+            refs.append((seed_text, await _image_source(prompt, model, size, seed_text)))
 
     data = []
     for seed_text, ref in refs:

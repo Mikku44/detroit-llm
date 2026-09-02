@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -37,7 +38,7 @@ func main() {
 	cfg := config.Load()
 	limiter := ratelimit.New(cfg.RateLimitPerMinute, time.Minute)
 	healthLimiter := ratelimit.New(30, time.Minute)
-	authLimiter := ratelimit.New(20, time.Minute)
+	authLimiter := ratelimit.New(10, time.Minute)
 	backendURL := cfg.BackendURL
 	sglangURL := cfg.SGLangURL
 
@@ -178,7 +179,15 @@ func main() {
 	})
 
 	log.Printf("Go edge gateway listening on :%s backend=%s sglang=%s", cfg.Port, backendURL, sglangURL)
-	if err := http.ListenAndServe(":"+cfg.Port, r); err != nil {
+	srv := &http.Server{
+		Addr:           ":" + cfg.Port,
+		Handler:        r,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   310 * time.Second,
+		IdleTimeout:    60 * time.Second,
+		MaxHeaderBytes: 8192,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -218,6 +227,28 @@ func cors(dashboardURL string) func(http.Handler) http.Handler {
 	}
 }
 
+func clientIP(r *http.Request) string {
+	if ip := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); ip != "" {
+		if idx := strings.Index(ip, ","); idx != -1 {
+			ip = ip[:idx]
+		}
+		return strings.TrimSpace(ip)
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		if len(parts) > 0 && strings.TrimSpace(parts[0]) != "" {
+			return strings.TrimSpace(parts[0])
+		}
+	}
+	if ip := strings.TrimSpace(r.Header.Get("X-Real-IP")); ip != "" {
+		return ip
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
 func rateLimitMiddleware(limiter *ratelimit.Limiter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,7 +260,7 @@ func rateLimitMiddleware(limiter *ratelimit.Limiter) func(http.Handler) http.Han
 			}
 			key := ratelimit.BucketKey(token)
 			if key == "" {
-				key = "ip:" + r.RemoteAddr
+				key = "ip:" + clientIP(r)
 			}
 			ok, retry := limiter.Allow(key)
 			if !ok {
@@ -286,6 +317,7 @@ func genericProxy(backendURL string) http.HandlerFunc {
 }
 
 func forwardToBackend(w http.ResponseWriter, r *http.Request, backendURL string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	u, _ := url.Parse(backendURL)
 	p := httputil.NewSingleHostReverseProxy(u)
 	p.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, err error) {

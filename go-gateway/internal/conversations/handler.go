@@ -144,7 +144,7 @@ func GetHandler(cfg config.Config, pool *pgxpool.Pool, convPool *pgxpool.Pool) h
 				}
 			}
 		} else if all {
-			limit = 0
+			limit = 100
 		}
 		if v := r.URL.Query().Get("before"); v != "" {
 			if n, e := strconv.ParseInt(v, 10, 64); e == nil {
@@ -175,13 +175,13 @@ func GetHandler(cfg config.Config, pool *pgxpool.Pool, convPool *pgxpool.Pool) h
 		if before != nil {
 			q += ` AND position < $2 ORDER BY position DESC`
 			args = append(args, *before)
-			if limit > 0 && !all {
+			if limit > 0 {
 				q += ` LIMIT $3`
 				args = append(args, limit)
 			}
 		} else {
 			q += ` ORDER BY position DESC`
-			if limit > 0 && !all {
+			if limit > 0 {
 				q += ` LIMIT $2`
 				args = append(args, limit)
 			}
@@ -275,7 +275,7 @@ func GetHandler(cfg config.Config, pool *pgxpool.Pool, convPool *pgxpool.Pool) h
 		if len(msgs) > 0 {
 			o := msgs[0].Position
 			oldest = &o
-			if limit > 0 && !all {
+			if limit > 0 {
 				if before == nil {
 					hasMore = total > int64(len(msgs))
 				} else {

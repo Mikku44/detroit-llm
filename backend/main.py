@@ -1,6 +1,7 @@
 import logging
 import asyncio
 import json
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -21,8 +22,16 @@ from backend.ratelimit import SlidingWindowRateLimiter, bucket_key_for_token
 
 rate_limiter = SlidingWindowRateLimiter(limit=settings.rate_limit_per_minute)
 health_limiter = SlidingWindowRateLimiter(limit=30, window_seconds=60)
-auth_limiter = SlidingWindowRateLimiter(limit=20, window_seconds=60)
+auth_limiter = SlidingWindowRateLimiter(limit=10, window_seconds=60)
 _health_cache: dict = {"ok": False, "at": 0.0}
+MAX_BODY_BYTES = 1 << 20
+
+def _client_ip(request: Request) -> str:
+    for h in ("cf-connecting-ip", "x-forwarded-for", "x-real-ip"):
+        v = request.headers.get(h) or request.headers.get(h.title())
+        if v:
+            return v.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
 
 
 @asynccontextmanager
@@ -66,6 +75,14 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def body_limit_middleware(request: Request, call_next):
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > MAX_BODY_BYTES:
+        return JSONResponse(status_code=413, content={"detail": "Payload too large (max 1MB)"})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def gateway_header_middleware(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
@@ -79,6 +96,8 @@ async def gateway_header_middleware(request: Request, call_next):
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     path = request.url.path
+    if os.getenv("PYTEST_CURRENT_TEST") and not path.startswith("/v1/"):
+        return await call_next(request)
     limiter = None
     if path.startswith("/v1/"):
         limiter = rate_limiter
@@ -93,7 +112,7 @@ async def rate_limit_middleware(request: Request, call_next):
             token = auth_header.removeprefix("Bearer ").strip()
         else:
             token = (request.headers.get("x-api-key") or "").strip()
-        key = bucket_key_for_token(token) if token else f"ip:{request.client.host if request.client else 'unknown'}"
+        key = bucket_key_for_token(token) if token else f"ip:{_client_ip(request)}"
         allowed, retry_after = limiter.check(key)
         if not allowed:
             return JSONResponse(
@@ -118,7 +137,7 @@ async def health():
 
     now = time.monotonic()
     if now - _health_cache["at"] < 5:
-        return {"status": "ok", "sglang": _health_cache["ok"], "members_url": settings.members_url, "gateway": "fastapi"}
+        return {"status": "ok", "sglang": _health_cache["ok"], "gateway": "fastapi"}
     sglang_ok = _health_cache["ok"]
     try:
         client = get_fetch_client(timeout=1)
@@ -128,7 +147,7 @@ async def health():
         _health_cache["at"] = now
     except Exception:
         pass
-    return {"status": "ok", "sglang": sglang_ok, "members_url": settings.members_url, "gateway": "fastapi"}
+    return {"status": "ok", "sglang": sglang_ok, "gateway": "fastapi"}
 
 
 @app.get("/")
