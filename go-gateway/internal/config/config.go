@@ -20,6 +20,9 @@ type Config struct {
 	ZAIKey             string
 	DashScopeURL       string
 	DashScopeKey       string
+	GrokAPIURL         string
+	GrokAPIKey         string
+	GrokImageModel     string
 	ImageProvider      string
 }
 
@@ -40,7 +43,10 @@ func Load() Config {
 		ZAIKey:            envOr("Z_API_KEY", ""),
 		DashScopeURL:      envOr("DASHSCOPE_URL", "https://dashscope-intl.aliyuncs.com"),
 		DashScopeKey:      envOr("DASHSCOPE_API_KEY", ""),
-		ImageProvider:     envOr("IMAGE_PROVIDER", "auto"),
+		GrokAPIURL:        envOr("GROK_API_URL", "https://api.x.ai/v1"),
+		GrokAPIKey:        envOr("GROK_API_KEY", envOr("XAI_API_KEY", "")),
+		GrokImageModel:    envOr("GROK_IMAGE_MODEL", "grok-imagine-image"),
+		ImageProvider:     envOr("IMAGE_PROVIDER", "grok"),
 	}
 }
 

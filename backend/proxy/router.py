@@ -70,8 +70,8 @@ def _gemini_model_for(requested: str | None) -> str:
         return requested
     return settings.gemini_model
 
-_NATIVE_VISION_EXACT = {"deepseek-v4-flash-vision-exp"}
-_NATIVE_VISION_PREFIXES = ("qwen", "glm-", "stealth/")
+_NATIVE_VISION_EXACT = {"deepseek-v4-flash-vision-exp", "grok-imagine-image", "grok-imagine-image-quality"}
+_NATIVE_VISION_PREFIXES = ("qwen", "glm-", "stealth/", "grok")
 
 
 def _supports_native_vision(model: str) -> bool:
@@ -498,7 +498,7 @@ FREE_MODEL_ONLY_MESSAGE = (
 
 FREE_TIER_EXTRA_MODELS = {"glm-4.5-air", "glm-4.7-flashx"}
 
-_IMAGE_ONLY_MODELS = {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304"}
+_IMAGE_ONLY_MODELS = {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304", "grok-imagine-image", "grok-imagine-image-quality", "grok-2-image", "grok-image", "grok-imagine"}
 
 MODEL_TOKEN_LIMITS: dict[str, tuple[int, int]] = {
     "glm-5.3": (65536, 131072),
@@ -1644,6 +1644,56 @@ async def _dashscope_image(prompt: str, size: str) -> dict:
     return {"ref": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}", "kind": "data_uri"}
 
 
+async def _grok_image(prompt: str, size: str) -> dict:
+    if not settings.grok_api_key:
+        raise RuntimeError("GROK_API_KEY not configured")
+    url = f"{settings.grok_api_url.rstrip('/')}/images/generations"
+    body = {"model": settings.grok_image_model or "grok-imagine-image", "prompt": prompt or "A beautiful scene", "n": 1}
+    headers = {"Content-Type": "application/json", "Authorization": f"Bearer {settings.grok_api_key}"}
+    async with httpx.AsyncClient(timeout=_IMAGE_GEN_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"Grok image API error ({resp.status_code}): {resp.text[:500]}")
+        data = resp.json()
+    items = data.get("data") or []
+    if not items:
+        raise RuntimeError("Grok returned no image")
+    item = items[0] if isinstance(items[0], dict) else {}
+    b64 = item.get("b64_json")
+    image_url = item.get("url")
+    if b64:
+        try:
+            raw = base64.b64decode(b64)
+            mime = "image/png"
+            try:
+                from backend.storage.r2 import upload_bytes, is_configured
+                if is_configured():
+                    r2_url = upload_bytes(raw, mime, prefix="images/generated")
+                    if r2_url:
+                        return {"ref": r2_url, "kind": "url"}
+            except Exception as e:
+                print(f"[r2] grok upload fallback: {e}")
+            return {"ref": f"data:{mime};base64,{b64}", "kind": "data_uri"}
+        except Exception:
+            pass
+    if image_url:
+        try:
+            from backend.storage.r2 import upload_bytes, is_configured
+            if is_configured():
+                try:
+                    raw, ctype = await _download_image_bytes(image_url)
+                    mime = ctype if ctype.startswith("image/") else "image/jpeg"
+                    r2_url = upload_bytes(raw, mime, prefix="images/generated")
+                    if r2_url:
+                        return {"ref": r2_url, "kind": "url"}
+                except Exception as e:
+                    print(f"[r2] grok url cache failed ({type(e).__name__}: {e}) -> return upstream url")
+        except Exception:
+            pass
+        return {"ref": image_url, "kind": "url"}
+    raise RuntimeError("Grok returned no url/b64_json")
+
+
 async def _zai_image(prompt: str, size: str, model: str = "glm-image") -> dict:
     if not settings.z_api_key:
         raise RuntimeError("Z_API_KEY not configured")
@@ -1703,10 +1753,11 @@ async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> d
 
     Returns {"ref": <https url or data uri>, "kind": "url" | "data_uri"}.
     Provider order (settings.image_provider):
+      - "grok": xAI Grok Imagine (needs GROK_API_KEY / XAI_API_KEY)
       - "dashscope": real AI generation via z-image-turbo (needs DASHSCOPE_API_KEY)
       - "unsplash": Unsplash Search API (needs UNSPLASH_ACCESS_KEY)
       - "loremflickr": free keyword API, no key required
-      - "auto": try dashscope -> unsplash -> loremflickr -> mock
+      - "auto": try grok -> zai -> dashscope -> unsplash -> loremflickr -> mock
       - "mock" (default): deterministic offline SVG, no network
     Any provider failure falls through to the next candidate, ending at mock.
     """
@@ -1717,9 +1768,18 @@ async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> d
             return ref
         except Exception as e:
             print(f"  [image] zai {model.lower()} failed ({type(e).__name__}: {e})")
+    if model and model.lower() in ("grok-imagine-image", "grok-2-image", "grok-imagine", "grok-image"):
+        try:
+            ref = await _grok_image(prompt, size)
+            print(f"  [image] grok {model.lower()}: {size}")
+            return ref
+        except Exception as e:
+            print(f"  [image] grok {model.lower()} failed ({type(e).__name__}: {e})")
     provider = (settings.image_provider or "mock").strip().lower()
     if provider == "auto":
-        candidates = ("zai", "dashscope", "unsplash", "loremflickr", "mock")
+        candidates = ("grok", "zai", "dashscope", "unsplash", "loremflickr", "mock")
+    elif provider == "grok":
+        candidates = ("grok", "mock")
     elif provider == "dashscope":
         candidates = ("dashscope", "mock")
     elif provider == "zai":
@@ -1730,7 +1790,17 @@ async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> d
         candidates = ("mock",)
 
     for candidate in candidates:
-        if candidate == "zai":
+        if candidate == "grok":
+            if not settings.grok_api_key:
+                print("  [image] grok selected but GROK_API_KEY is unset")
+            else:
+                try:
+                    ref = await _grok_image(prompt, size)
+                    print(f"  [image] grok {settings.grok_image_model}: {size}")
+                    return ref
+                except Exception as e:
+                    print(f"  [image] grok failed ({type(e).__name__}: {e})")
+        elif candidate == "zai":
             try:
                 # Prefer the requested zai model if it is a cogview/glm-image
                 z_model = model if model and model.lower() in ("glm-image", "cogview-4", "cogview-4-250304") else "glm-image"
@@ -2676,7 +2746,7 @@ async def image_generations(
     if not isinstance(body, dict) or not body:
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
 
-    model = body.get("model", "dall-e-3")
+    model = body.get("model", "grok-imagine-image")
     prompt = str(body.get("prompt") or "").strip()
     n = int(body.get("n", 1))
     size = str(body.get("size") or "1024x1024")
@@ -2881,8 +2951,9 @@ def _image_engine_model(model: str) -> str:
     if (
         engine.lower().startswith("qwen")
         or engine.lower().startswith("glm-") or engine.lower() == "stealth/ox-alpha"
+        or engine.lower().startswith("grok")
         or engine.startswith("gemini-")
-        or engine in ("gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304")
+        or engine in ("gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304", "grok-imagine-image", "grok-imagine-image-quality", "z-image-turbo")
     ):
         return "deepseek-v4-pro"
     return engine
@@ -4263,6 +4334,12 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             "type": "model",
             "id": "cogview-4-250304",
             "display_name": "cogview-4-250304",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "grok-imagine-image",
+            "display_name": "grok-imagine-image",
         },
     ]
     if not can_see_claude:

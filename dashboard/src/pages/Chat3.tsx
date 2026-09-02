@@ -6,6 +6,7 @@ import UpgradeDialog from '../components/UpgradeDialog'
 import { FiSend, FiPlus, FiCopy, FiCheck, FiPaperclip, FiThumbsUp, FiThumbsDown, FiChevronDown, FiZap, FiX, FiArrowRight, FiFileText, FiClock, FiImage, FiSearch } from 'react-icons/fi'
 import { useChatHistory } from '../lib/chat-history'
 import IOSLoading from '../components/ios-loading'
+import { Skeleton } from '../components/ui/skeleton'
 import { motion, AnimatePresence } from 'motion/react'
 
 interface Cta {
@@ -61,6 +62,7 @@ const ALLOWED_CHAT_MODELS = new Set([
   'qwen3.7-flash',
   'z-image-turbo',
   'glm-image',
+  'grok-imagine-image',
   'glm-5.3',
   'glm-5.3-flash',
   'glm-4.5-air',
@@ -100,6 +102,11 @@ const MODEL_META: Record<string, ModelMeta> = {
   'glm-image': {
     name: 'GLM Image',
     desc: 'Image — Z.AI text-to-image (CogView)',
+    badges: ['image'],
+  },
+  'grok-imagine-image': {
+    name: 'Grok Imagine',
+    desc: 'Image — xAI Grok text-to-image',
     badges: ['image'],
   },
   'glm-5.3': {
@@ -173,6 +180,7 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'qwen3.7-flash': 1000000,
   'z-image-turbo': 1000000,
   'glm-image': 1000000,
+  'grok-imagine-image': 1000000,
   'glm-5.3': 1000000,
   'glm-5.3-flash': 1000000,
   'glm-4.5-air': 1000000,
@@ -436,6 +444,7 @@ export default function Chat3() {
   const [model, setModel] = useState('')
   const [models, setModels] = useState<string[]>([])
   const [modelOpen, setModelOpen] = useState(false)
+  const [modelsLoading, setModelsLoading] = useState(true)
   const [freeTier, setFreeTier] = useState(false)
   const [thinking, setThinking] = useState(false)
   const [imageGen, setImageGen] = useState(false)
@@ -583,6 +592,7 @@ export default function Chat3() {
 
   useEffect(() => {
     if (!sessionToken) return
+    setModelsLoading(true)
     fetch('/v1/models', {
       headers: { Authorization: `Bearer ${sessionToken}` },
     })
@@ -596,6 +606,9 @@ export default function Chat3() {
         if (!filtered.includes('glm-image') && ALLOWED_CHAT_MODELS.has('glm-image')) {
           filtered = [...filtered, 'glm-image']
         }
+        if (!filtered.includes('grok-imagine-image') && ALLOWED_CHAT_MODELS.has('grok-imagine-image')) {
+          filtered = [...filtered, 'grok-imagine-image']
+        }
         const toShow = filtered.filter((id: string) => ALLOWED_CHAT_MODELS.has(id))
         if (toShow.length) {
           setModels(toShow)
@@ -605,6 +618,7 @@ export default function Chat3() {
         }
       })
       .catch(() => {})
+      .finally(() => setModelsLoading(false))
   }, [sessionToken])
 
   useEffect(() => {
@@ -722,13 +736,13 @@ export default function Chat3() {
         ? model
         : 'deepseek-v4-flash'
       : model
-    const NATIVE_VISION_MODELS = new Set(['deepseek-v4-flash-vision-exp', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-4.5-air', 'glm-4.7-flashx', 'gemini-2.5-flash'])
+    const NATIVE_VISION_MODELS = new Set(['deepseek-v4-flash-vision-exp', 'qwen3.7-flash', 'glm-5.3', 'glm-5.3-flash', 'glm-4.5-air', 'glm-4.7-flashx', 'gemini-2.5-flash', 'grok-imagine-image', 'grok-imagine-image-quality', 'grok-4', 'grok-2-image'])
     const upstreamModel = hasMedia && !NATIVE_VISION_MODELS.has(requestModel) ? (requestModel.startsWith('gemini-') ? requestModel : 'gemini-2.5-flash') : requestModel
     setMessages((m) => [...m, { role: 'user', content: text, attachments, model: requestModel }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
     setBusy(true)
     setIsVision(hasMedia)
 
-    const IMAGE_ONLY_MODELS = new Set(['z-image-turbo', 'glm-image', 'gpt-image-1', 'dall-e-3', 'gemini-2.0-flash-preview-image-generation'])
+    const IMAGE_ONLY_MODELS = new Set(['z-image-turbo', 'glm-image', 'grok-imagine-image', 'gpt-image-1', 'dall-e-3', 'gemini-2.0-flash-preview-image-generation'])
     const isImageModel = IMAGE_ONLY_MODELS.has(requestModel)
     const doImageGen = imageGen || isImageModel
     const history = doImageGen
@@ -1033,17 +1047,44 @@ export default function Chat3() {
         <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1 justify-center">
           <div ref={modelRef} className="relative min-w-0 max-w-[60vw] sm:max-w-none">
             <button
-              onClick={() => setModelOpen((o) => !o)}
-              className="flex h-8 sm:h-9 items-center gap-1.5 sm:gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-3 sm:px-4 text-xs sm:text-sm text-zinc-300 hover:bg-zinc-800 transition-colors min-w-0 max-w-full"
+              onClick={() => !modelsLoading && setModelOpen((o) => !o)}
+              disabled={modelsLoading}
+              className="flex h-8 sm:h-9 items-center gap-1.5 sm:gap-2 rounded-full border border-zinc-700 bg-zinc-900 px-3 sm:px-4 text-xs sm:text-sm text-zinc-300 hover:bg-zinc-800 transition-colors min-w-0 max-w-full disabled:opacity-60"
             >
-              <span className="size-2 rounded-full bg-(--primary-color) shrink-0" />
-              <span className="truncate font-medium min-w-0">{MODEL_META[model]?.name ?? model}</span>
-              <FiChevronDown size={12} className={`shrink-0 transition-transform ${modelOpen ? 'rotate-180' : ''}`} />
+              {modelsLoading ? (
+                <>
+                  <span className="size-2 rounded-full bg-zinc-700 animate-pulse shrink-0" />
+                  <Skeleton className="h-3 w-24 bg-zinc-800" />
+                  <FiChevronDown size={12} className="shrink-0 text-zinc-600" />
+                </>
+              ) : (
+                <>
+                  <span className="size-2 rounded-full bg-(--primary-color) shrink-0" />
+                  <span className="truncate font-medium min-w-0">{MODEL_META[model]?.name ?? model}</span>
+                  <FiChevronDown size={12} className={`shrink-0 transition-transform ${modelOpen ? 'rotate-180' : ''}`} />
+                </>
+              )}
             </button>
             {modelOpen && (
             <div className="absolute left-1/2 -translate-x-1/2 sm:left-auto sm:right-0 sm:translate-x-0 top-full z-50 mt-2 w-[calc(100vw-1.5rem)] sm:w-72 max-w-[22rem] overflow-hidden rounded-2xl border border-zinc-700 bg-zinc-900 py-1.5 shadow-xl">
               <div className="max-h-[60vh] sm:max-h-100 overflow-y-auto overscroll-contain">
-              {models.map((m) => {
+              {modelsLoading ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="flex w-full items-start gap-3 px-4 py-2.5">
+                    <Skeleton className="mt-1.5 size-2 shrink-0 rounded-full bg-zinc-800" />
+                    <span className="flex min-w-0 flex-1 flex-col gap-2">
+                      <Skeleton className="h-4 w-3/5 bg-zinc-800" />
+                      <span className="flex gap-1">
+                        <Skeleton className="h-3 w-8 rounded-full bg-zinc-800" />
+                        <Skeleton className="h-3 w-10 rounded-full bg-zinc-800" />
+                      </span>
+                      <Skeleton className="h-3 w-full bg-zinc-800" />
+                      <Skeleton className="h-2 w-24 bg-zinc-800" />
+                    </span>
+                  </div>
+                ))
+              ) : (
+                models.map((m) => {
                 const meta = MODEL_META[m]
                 return (
                   <button
@@ -1081,7 +1122,7 @@ export default function Chat3() {
                     {m === model && <FiCheck size={14} className="mt-1 text-(--primary-color) shrink-0" />}
                   </button>
                 )
-              })}
+              }))}
               </div>
             </div>
           )}

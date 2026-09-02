@@ -34,6 +34,7 @@ type cachedUsage struct {
 
 var imageOnlyModels = map[string]bool{
 	"z-image-turbo": true, "gpt-image-1": true, "dall-e-3": true, "gemini-2.0-flash-preview-image-generation": true, "glm-image": true, "cogview-4": true, "cogview-4-250304": true,
+	"grok-imagine-image": true, "grok-imagine-image-quality": true, "grok-2-image": true, "grok-image": true, "grok-imagine": true,
 }
 
 func isImageModel(model string) bool {
@@ -57,7 +58,7 @@ func HandleChatCompletions(cfg config.Config, pool *pgxpool.Pool) http.HandlerFu
 			forwardToBackend(w, r, cfg.BackendURL)
 			return
 		}
-		isDirect := strings.Contains(model, "deepseek") || strings.HasPrefix(model, "glm-") || model == ""
+		isDirect := strings.Contains(model, "deepseek") || strings.HasPrefix(model, "glm-") || strings.HasPrefix(model, "grok") || model == ""
 		if !isDirect {
 			forwardToBackend(w, r, cfg.BackendURL)
 			return
@@ -222,6 +223,12 @@ func pickUpstream(model string, cfg config.Config) (string, string) {
 	if strings.HasPrefix(low, "glm-") {
 		if cfg.ZAIKey != "" {
 			return strings.TrimSuffix(cfg.ZAIURL, "/"), cfg.ZAIKey
+		}
+		return "", ""
+	}
+	if strings.HasPrefix(low, "grok") {
+		if cfg.GrokAPIKey != "" {
+			return strings.TrimSuffix(cfg.GrokAPIURL, "/"), cfg.GrokAPIKey
 		}
 		return "", ""
 	}

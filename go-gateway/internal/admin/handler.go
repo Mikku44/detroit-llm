@@ -147,11 +147,14 @@ func buildStatus(ctx context.Context, pool *pgxpool.Pool, cfg config.Config) (ma
 			"sglang":      sglangOK,
 			"members_url": "",
 			"providers": map[string]interface{}{
-				"deepseek_configured":   false,
+				"deepseek_configured":   cfg.DeepseekKey != "",
 				"gemini_configured":     false,
-				"zai_configured":        false,
+				"zai_configured":        cfg.ZAIKey != "",
+				"dashscope_configured":  cfg.DashScopeKey != "",
+				"grok_configured":       cfg.GrokAPIKey != "",
 				"openrouter_configured": false,
-				"image_provider":        "auto",
+				"image_provider":        cfg.ImageProvider,
+				"grok_image_model":      cfg.GrokImageModel,
 			},
 		},
 		"balance": map[string]interface{}{

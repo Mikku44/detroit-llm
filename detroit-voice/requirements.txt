@@ -1,0 +1,10 @@
+torch>=2.0
+torchaudio>=2.0
+fastapi>=0.110
+uvicorn[standard]>=0.30
+typer>=0.12
+soundfile>=0.12
+numpy>=1.24
+pythainlp>=4.0
+pyyaml>=6.0
+tqdm>=4.66
