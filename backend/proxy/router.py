@@ -2990,6 +2990,35 @@ def _openai_to_anthropic_payload(body: dict) -> dict:
         payload["stop_sequences"] = body["stop"] if isinstance(body["stop"], list) else [body["stop"]]
     if body.get("stop_sequences"):
         payload["stop_sequences"] = body["stop_sequences"]
+    reasoning = body.get("reasoning") or {}
+    output_cfg = body.get("output_config") or {}
+    effort = None
+    if isinstance(reasoning, dict):
+        effort = reasoning.get("effort")
+    if not effort and isinstance(output_cfg, dict):
+        effort = output_cfg.get("effort")
+    if not effort:
+        effort = body.get("reasoning_effort")
+    if effort and effort != "none":
+        adaptive_models = {"claude-fable-5-1", "claude-sonnet-5"}
+        raw_model = (payload.get("model") or body.get("model") or "").lower()
+        if raw_model in adaptive_models:
+            effort_out = {"low": "low", "high": "high", "max": "high"}.get(effort, "high")
+            payload["thinking"] = {"type": "adaptive"}
+            payload["output_config"] = {"effort": effort_out}
+            payload.pop("temperature", None)
+            payload.pop("top_p", None)
+            payload.pop("top_k", None)
+        else:
+            budget_map = {"low": 4000, "high": 10000, "max": 16000}
+            budget = budget_map.get(effort, 10000)
+            max_t = payload.get("max_tokens", 4096)
+            if budget >= max_t:
+                payload["max_tokens"] = budget + 1024
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+            payload.pop("temperature", None)
+            payload.pop("top_p", None)
+            payload.pop("top_k", None)
     return payload
 
 
@@ -3043,6 +3072,9 @@ async def _proxy_to_anthropic(db: AsyncSession, user_id: str, model: str, body: 
                                             t = delta["text"]
                                             text_acc += t
                                             yield f'data: {json.dumps({"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {"content": t}, "finish_reason": None}]})}\n\n'.encode()
+                                        elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                                            t = delta["thinking"]
+                                            yield f'data: {json.dumps({"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [{"index": 0, "delta": {"reasoning_content": t}, "finish_reason": None}]})}\n\n'.encode()
                                         elif delta.get("type") == "input_json_delta" and delta.get("partial_json"):
                                             pj = delta["partial_json"]
                                             text_acc += pj
