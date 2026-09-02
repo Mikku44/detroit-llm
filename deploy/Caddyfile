@@ -5,17 +5,20 @@
 
 {$DOMAIN:chat.khain.app} {
     encode gzip
+
     root * /srv
+
     request_body {
-        max_size 1MB
+        max_size 5MB
     }
 
     # ============================================================
     # Rate limiting
     # ============================================================
+
+    # General API
     rate_limit {
-        # General API endpoints
-        zone static {
+        zone api {
             match {
                 path /v1/* /admin/* /api/conversations* /api/web/* /api/*
             }
@@ -34,7 +37,7 @@
             events 30
         }
 
-        # Authentication / payment endpoints
+        # Auth / Stripe
         zone auth {
             match {
                 path /auth/* /stripe/*
