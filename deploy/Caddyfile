@@ -1,9 +1,14 @@
 {
     email {$ACME_EMAIL}
+
     acme_ca https://acme-v02.api.letsencrypt.org/directory
+
+    # Use HTTP-01 challenge instead of TLS-ALPN-01
+    acme_http_challenge
 }
 
 {$DOMAIN:chat.khain.app} {
+
     encode gzip
 
     root * /srv
@@ -16,8 +21,8 @@
     # Rate limiting
     # ============================================================
 
-    # General API
     rate_limit {
+        # General API
         zone api {
             match {
                 path /v1/* /admin/* /api/conversations* /api/web/* /api/*
