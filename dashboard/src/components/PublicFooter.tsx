@@ -19,6 +19,7 @@ export default function PublicFooter() {
               <a href="/#features" className="hover:text-zinc-300">Features</a>
               <a href="/#models" className="hover:text-zinc-300">Models</a>
               <Link to="/docs" className="hover:text-zinc-300">Docs</Link>
+              <Link to="/whatsnew" className="hover:text-zinc-300">What&apos;s New</Link>
               <Link to="/login" className="hover:text-zinc-300">Sign in</Link>
             </div>
           </div>
@@ -29,6 +30,7 @@ export default function PublicFooter() {
               <a href="https://discord.gg/KuMVmcK3cC" target="_blank" rel="noreferrer" className="hover:text-zinc-300">Discord</a>
               <a href="https://www.facebook.com/khainapp" target="_blank" rel="noreferrer" className="hover:text-zinc-300">Facebook</a>
               <Link to="/models" className="hover:text-zinc-300">Models</Link>
+              <Link to="/whatsnew" className="hover:text-zinc-300">What&apos;s New</Link>
             </div>
           </div>
           <div>

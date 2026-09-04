@@ -502,7 +502,7 @@ export default function Docs() {
             </TableHeader>
             <TableBody>
               {[
-                ['model', 'string', 'Yes', 'Model identifier, e.g. deepseek-v4-pro, deepseek-v4-flash, or qwen3.7-flash.'],
+                ['model', 'string', 'Yes', 'Model identifier, e.g. deepseek-v4-pro, deepseek-v4-flash, qwen3.7-flash, or qwen3.8-flash.'],
                 ['max_tokens', 'integer', 'No', 'Maximum tokens to generate. Defaults to 1024.'],
                 ['messages', 'array<Message>', 'Yes', 'List of messages: { role, content }. Roles: system, user, assistant.'],
                 ['temperature', 'number', 'No', 'Sampling temperature between 0 and 2. Defaults to 1.0.'],
@@ -562,6 +562,14 @@ export default function Docs() {
               id: 'qwen3.7-flash',
               tag: 'Fast',
               desc: 'Qwen 3.7 Flash — fast, with optional thinking mode for stronger reasoning.',
+              ctx: '128K context',
+              size: '—',
+              highlight: false,
+            },
+            {
+              id: 'qwen3.8-flash',
+              tag: 'Fast',
+              desc: 'Qwen 3.8 Flash — fast, with optional thinking mode for stronger reasoning.',
               ctx: '128K context',
               size: '—',
               highlight: false,

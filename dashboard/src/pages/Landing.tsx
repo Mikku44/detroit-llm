@@ -70,7 +70,7 @@ export default function Landing() {
 
   const faqs = [
     { q: 'What is Detroit LLM?', a: 'Detroit LLM is an AI Chat Platform and LLM Gateway that lets you chat with multiple AI models in one place with seamless model switching via OpenAI-compatible API.' },
-    { q: 'Which models are supported?', a: 'Currently supports deepseek-v4-flash, deepseek-v4-pro, qwen3.7-flash, z-image-turbo, glm-5.3 and more. See the full list at /v1/models or the Models page.' },
+    { q: 'Which models are supported?', a: 'Currently supports deepseek-v4-flash, deepseek-v4-pro, qwen3.7-flash, qwen3.8-flash, z-image-turbo, glm-5.3 and more. See the full list at /v1/models or the Models page.' },
     { q: 'Does it work with existing OpenAI code?', a: 'Yes. Just change base_url to https://chat.khain.app/v1 and use your Detroit LLM API key. Existing OpenAI SDK code works without changes.' },
     { q: 'How do I get started?', a: 'Click “Sign in with Google” — we verify your MIKKUCN YouTube Membership or Paid plan, then you get an API key and can start chatting or calling the API immediately.' },
     { q: 'How does pricing work?', a: 'Access is tier-based: YouTube members and Paid plans get different weekly/monthly token quotas. See details on the Upgrade plan after signing in.' },
@@ -176,6 +176,7 @@ export default function Landing() {
               { id: 'deepseek-v4-flash', tag: 'Fast', desc: 'DeepSeek V4 Flash — fast for everyday Q&A and high-volume tasks', ctx: '1M context', size: '304B' },
               { id: 'deepseek-v4-pro', tag: 'Flagship', desc: 'DeepSeek V4 Pro — most capable for reasoning, code and production', ctx: '1M context', size: '304B' },
               { id: 'qwen3.7-flash', tag: 'Fast', desc: 'Qwen 3.7 Flash — fast with thinking mode for stronger reasoning', ctx: '128K context', size: '—' },
+              { id: 'qwen3.8-flash', tag: 'Fast', desc: 'Qwen 3.8 Flash — fast with thinking mode for stronger reasoning', ctx: '128K context', size: '—' },
               { id: 'z-image-turbo', tag: 'Image', desc: 'z-image-turbo — high-quality 1024×1024 image generation', ctx: '1024×1024', size: '—' },
               { id: 'glm-5.3', tag: 'Reasoning', desc: 'GLM-5.3 — 1M context / max 128K output', ctx: '1M context', size: '128K max' },
               { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX — fast and efficient', ctx: '131K max', size: '65K default' },

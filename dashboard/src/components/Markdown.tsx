@@ -7,6 +7,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { FiCopy, FiCheck } from 'react-icons/fi'
 import { LinkTooltip } from './LinkTooltip'
 import { GlowImage } from './GlowImage'
+import CodeArtifact, { isPreviewableLanguage } from './chat/CodeArtifact'
 
 import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
 import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
@@ -69,6 +70,10 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
     navigator.clipboard?.writeText(code)
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
+  }
+
+  if (isPreviewableLanguage(language) && code.trim().length > 0) {
+    return <CodeArtifact language={language} code={code} />
   }
 
   return (

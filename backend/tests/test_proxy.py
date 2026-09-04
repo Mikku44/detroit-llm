@@ -15,8 +15,6 @@ from backend.proxy.router import (
     _anthropic_chat_payload,
     _build_anthropic_message,
     _image_seed,
-    _mock_image_b64,
-    _mock_image_svg,
     _parse_image_toolcall,
     _wants_image,
     _parse_wants_image,
@@ -90,6 +88,7 @@ def test_free_user_key_allowed_on_anthropic(client, verified_free_user_id):
 @pytest.mark.asyncio
 async def test_free_user_over_weekly_limit_rejected(client, verified_free_user_id, db_session):
     """Free-tier users are blocked once their weekly token budget runs out."""
+    from datetime import datetime, timedelta, timezone
     from backend.auth.session import create_session_token
     from backend.db.models import UsageLog
 
@@ -100,10 +99,16 @@ async def test_free_user_over_weekly_limit_rejected(client, verified_free_user_i
         headers={"Authorization": f"Bearer {token}"},
     ).json()
 
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
     db_session.add_all(
         [
-            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=60000, completion_tokens=0, total_tokens=60000),
-            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=40000, completion_tokens=0, total_tokens=40000),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=14000, completion_tokens=0, total_tokens=14000, created_at=now - timedelta(days=1, hours=1)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=14000, completion_tokens=0, total_tokens=14000, created_at=now - timedelta(days=2)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=14000, completion_tokens=0, total_tokens=14000, created_at=now - timedelta(days=3)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=14000, completion_tokens=0, total_tokens=14000, created_at=now - timedelta(days=4)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=14000, completion_tokens=0, total_tokens=14000, created_at=now - timedelta(days=5)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=14000, completion_tokens=0, total_tokens=14000, created_at=now - timedelta(days=6)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=16000, completion_tokens=0, total_tokens=16000, created_at=now),
         ]
     )
     await db_session.commit()
@@ -135,14 +140,14 @@ async def test_free_user_over_monthly_limit_rejected(client, verified_free_user_
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     db_session.add_all(
         [
-            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=50000, completion_tokens=0, total_tokens=50000),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-pro", prompt_tokens=10000, completion_tokens=0, total_tokens=10000),
             # 15 days ago: inside the 30-day window but outside the 7-day one.
             UsageLog(
                 api_key_id=created["id"],
                 model="deepseek-v4-pro",
-                prompt_tokens=390000,
+                prompt_tokens=430000,
                 completion_tokens=0,
-                total_tokens=390000,
+                total_tokens=430000,
                 created_at=now - timedelta(days=15),
             ),
         ]
@@ -201,8 +206,19 @@ async def test_nomad_user_over_weekly_limit_rejected(client, verified_free_user_
         headers={"Authorization": f"Bearer {token}"},
     ).json()
 
-    db_session.add(
-        UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=600000, completion_tokens=0, total_tokens=600000)
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    db_session.add_all(
+        [
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71428, completion_tokens=0, total_tokens=71428, created_at=now - timedelta(days=1, hours=1)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71428, completion_tokens=0, total_tokens=71428, created_at=now - timedelta(days=2)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71428, completion_tokens=0, total_tokens=71428, created_at=now - timedelta(days=3)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71428, completion_tokens=0, total_tokens=71428, created_at=now - timedelta(days=4)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71428, completion_tokens=0, total_tokens=71428, created_at=now - timedelta(days=5)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71428, completion_tokens=0, total_tokens=71428, created_at=now - timedelta(days=6)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71433, completion_tokens=0, total_tokens=71433, created_at=now),
+        ]
     )
     await db_session.commit()
 
@@ -236,15 +252,15 @@ async def test_nomad_user_over_monthly_limit_rejected(client, verified_free_user
     now = datetime.now(timezone.utc).replace(tzinfo=None)
     db_session.add_all(
         [
-            # 100K today: inside the 500K weekly budget.
-            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=100000, completion_tokens=0, total_tokens=100000),
+            # 50K today: inside daily (71428) and weekly (500K) budget.
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=50000, completion_tokens=0, total_tokens=50000),
             # 15 days ago: inside the 30-day window but outside the 7-day one.
             UsageLog(
                 api_key_id=created["id"],
                 model="deepseek-v4-flash",
-                prompt_tokens=2100000,
+                prompt_tokens=2130000,
                 completion_tokens=0,
-                total_tokens=2100000,
+                total_tokens=2130000,
                 created_at=now - timedelta(days=15),
             ),
         ]
@@ -330,8 +346,16 @@ async def test_nomad_user_weekly_limit_rolls_out(client, verified_free_user_id, 
     assert r.status_code == 200, r.text
 
     # Now add usage inside the window: the same volume should block again.
-    db_session.add(
-        UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=600000, completion_tokens=0, total_tokens=600000)
+    db_session.add_all(
+        [
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71000, completion_tokens=0, total_tokens=71000, created_at=now - timedelta(days=1, hours=1)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71000, completion_tokens=0, total_tokens=71000, created_at=now - timedelta(days=2)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71000, completion_tokens=0, total_tokens=71000, created_at=now - timedelta(days=3)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71000, completion_tokens=0, total_tokens=71000, created_at=now - timedelta(days=4)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71000, completion_tokens=0, total_tokens=71000, created_at=now - timedelta(days=5)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=71000, completion_tokens=0, total_tokens=71000, created_at=now - timedelta(days=6)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=174000, completion_tokens=0, total_tokens=174000, created_at=now),
+        ]
     )
     await db_session.commit()
 
@@ -341,7 +365,7 @@ async def test_nomad_user_weekly_limit_rolls_out(client, verified_free_user_id, 
         headers={"Authorization": f"Bearer {created['key']}"},
     )
     assert r.status_code == 403
-    assert "Weekly limit reached" in r.text
+    assert "limit reached" in r.text
 
 
 @pytest.mark.asyncio
@@ -370,9 +394,22 @@ async def test_paid_tier_over_weekly_limit_rejected(client, verified_free_user_i
         headers={"Authorization": f"Bearer {token}"},
     ).json()
 
-    # Just over the tier's weekly budget, still under its monthly budget.
-    db_session.add(
-        UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=weekly + 1, completion_tokens=0, total_tokens=weekly + 1)
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    daily = (weekly + 6) // 7
+    per_day = daily - 1
+    remaining = (weekly + 1) - per_day * 6
+    db_session.add_all(
+        [
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=per_day, completion_tokens=0, total_tokens=per_day, created_at=now - timedelta(days=1, hours=1)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=per_day, completion_tokens=0, total_tokens=per_day, created_at=now - timedelta(days=2)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=per_day, completion_tokens=0, total_tokens=per_day, created_at=now - timedelta(days=3)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=per_day, completion_tokens=0, total_tokens=per_day, created_at=now - timedelta(days=4)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=per_day, completion_tokens=0, total_tokens=per_day, created_at=now - timedelta(days=5)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=per_day, completion_tokens=0, total_tokens=per_day, created_at=now - timedelta(days=6)),
+            UsageLog(api_key_id=created["id"], model="deepseek-v4-flash", prompt_tokens=remaining, completion_tokens=0, total_tokens=remaining, created_at=now),
+        ]
     )
     await db_session.commit()
 
@@ -1529,28 +1566,12 @@ def test_image_seed_is_stable():
     assert _image_seed("a cat") != _image_seed("a dog")
 
 
-def test_mock_image_b64_is_valid_svg():
-    import base64 as b64mod
-
-    b64 = _mock_image_b64("a fox", "dall-e-3", "512x512", "seed")
-    svg = b64mod.b64decode(b64).decode("utf-8")
-    assert svg.startswith("<svg")
-    assert "</svg>" in svg
-    assert "a fox" in svg
-
-
-def test_mock_image_svg_sizes():
-    assert 'width="512"' in _mock_image_svg("p", "m", "512x512", "s")
-    assert 'width="1024"' in _mock_image_svg("p", "m", "1024x1024", "s")
-    assert 'width="1792"' in _mock_image_svg("p", "m", "1792x1024", "s")
-
-
 def test_image_generations_requires_session(client):
     r = client.post("/v1/images/generations", json={"prompt": "a cat"})
     assert r.status_code == 401
 
 
-def test_image_generations_mock_url(client, api_key):
+def test_image_generations_loremflickr_url(client, api_key):
     r = client.post(
         "/v1/images/generations",
         json={"prompt": "a cat", "model": "dall-e-3", "size": "512x512", "n": 2},
@@ -1561,11 +1582,19 @@ def test_image_generations_mock_url(client, api_key):
     assert body["created"] > 0
     assert len(body["data"]) == 2
     for item in body["data"]:
-        assert item["url"].startswith("data:image/svg+xml;base64,")
+        assert item["url"].startswith("https://loremflickr.com/")
     assert body["data"][0]["revised_prompt"] == "a cat"
 
 
-def test_image_generations_mock_b64_json(client, api_key):
+def test_image_generations_b64_json(client, api_key, monkeypatch):
+    import base64 as b64mod
+
+    from backend.proxy import router as proxy_router
+
+    async def fake_download(url):
+        return (b"fake-png-bytes", "image/png")
+
+    monkeypatch.setattr(proxy_router, "_download_image_bytes", fake_download)
     r = client.post(
         "/v1/images/generations",
         json={"prompt": "a cat", "response_format": "b64_json"},
@@ -1574,6 +1603,22 @@ def test_image_generations_mock_b64_json(client, api_key):
     assert r.status_code == 200, r.text
     body = r.json()
     assert "b64_json" in body["data"][0]
+    assert b64mod.b64decode(body["data"][0]["b64_json"]) == b"fake-png-bytes"
+
+
+def test_image_generations_b64_download_failure_is_502(client, api_key, monkeypatch):
+    from backend.proxy import router as proxy_router
+
+    async def fake_download_fail(url):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(proxy_router, "_download_image_bytes", fake_download_fail)
+    r = client.post(
+        "/v1/images/generations",
+        json={"prompt": "a cat", "response_format": "b64_json"},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 502, r.text
 
 
 def test_image_generations_requires_prompt(client, api_key):
@@ -1614,7 +1659,7 @@ def test_wants_image_uses_only_last_user_message():
     assert _wants_image(body)
 
 
-def test_image_tool_loop_mock_non_stream(client, api_key):
+def test_image_tool_loop_loremflickr_non_stream(client, api_key):
     r = client.post(
         "/v1/chat/completions",
         json={"messages": [{"role": "user", "content": "สร้างรูปสุนัขนั่งเล่น"}]},
@@ -1623,11 +1668,11 @@ def test_image_tool_loop_mock_non_stream(client, api_key):
     assert r.status_code == 200, r.text
     body = r.json()
     content = body["choices"][0]["message"]["content"]
-    assert "data:image/svg+xml;base64," in content
+    assert "loremflickr.com" in content
     assert r.headers["content-type"].startswith("application/json")
 
 
-def test_image_tool_loop_mock_stream(client, api_key):
+def test_image_tool_loop_loremflickr_stream(client, api_key):
     r = client.post(
         "/v1/chat/completions",
         json={"messages": [{"role": "user", "content": "วาดรูปท้องฟ้าตอนกลางคืน"}], "stream": True},
@@ -1647,7 +1692,8 @@ def test_image_tool_loop_preserves_normal_chat(client, api_key):
     )
     assert r.status_code == 200, r.text
     content = r.json()["choices"][0]["message"]["content"]
-    assert "data:image/svg+xml;base64," not in content
+    assert "loremflickr.com" not in content
+    assert "![generated image]" not in content
 
 
 def test_parse_image_toolcall_bare_json():
@@ -1814,22 +1860,21 @@ def test_detect_image_intent_false_when_no_keyword(monkeypatch):
     assert result is False
 
 
-def test_image_source_mock_default_no_network(monkeypatch):
+def test_image_source_unknown_provider_raises(monkeypatch):
     from backend.proxy import router as proxy_router
 
     monkeypatch.setattr(proxy_router.settings, "image_provider", "mock")
-    result = asyncio.run(proxy_router._image_source("a cat", "dall-e-3", "512x512", "seed"))
-    assert result["kind"] == "data_uri"
-    assert result["ref"].startswith("data:image/svg+xml;base64,")
+    with pytest.raises(RuntimeError, match="Unknown image provider"):
+        asyncio.run(proxy_router._image_source("a cat", "dall-e-3", "512x512", "seed"))
 
 
-def test_image_source_unsplash_without_key_falls_back_to_mock(monkeypatch):
+def test_image_source_unsplash_without_key_raises(monkeypatch):
     from backend.proxy import router as proxy_router
 
     monkeypatch.setattr(proxy_router.settings, "image_provider", "unsplash")
     monkeypatch.setattr(proxy_router.settings, "unsplash_access_key", "")
-    result = asyncio.run(proxy_router._image_source("a cat", "dall-e-3", "512x512", "seed"))
-    assert result["kind"] == "data_uri"
+    with pytest.raises(RuntimeError, match="no image provider"):
+        asyncio.run(proxy_router._image_source("a cat", "dall-e-3", "512x512", "seed"))
 
 
 def test_image_source_unsplash_returns_url(monkeypatch):
@@ -1873,14 +1918,13 @@ def test_loremflickr_url_with_non_ascii_prompt():
     assert url2.startswith("https://loremflickr.com/512/512/a-red-fox-in-the?lock=")
 
 
-def test_image_source_dashscope_without_key_falls_back_to_mock(monkeypatch):
+def test_image_source_dashscope_without_key_raises(monkeypatch):
     from backend.proxy import router as proxy_router
 
     monkeypatch.setattr(proxy_router.settings, "image_provider", "dashscope")
     monkeypatch.setattr(proxy_router.settings, "dashscope_api_key", "")
-    result = asyncio.run(proxy_router._image_source("a cat", "dall-e-3", "512x512", "seed"))
-    assert result["kind"] == "data_uri"
-    assert result["ref"].startswith("data:image/svg+xml;base64,")
+    with pytest.raises(RuntimeError, match="no image provider"):
+        asyncio.run(proxy_router._image_source("a cat", "dall-e-3", "512x512", "seed"))
 
 
 def test_image_source_dashscope_returns_data_uri(monkeypatch):

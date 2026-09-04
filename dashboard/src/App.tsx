@@ -11,6 +11,7 @@ import Layout from './components/Layout'
 import Chat3 from './pages/Chat3'
 import Docs from './pages/Docs'
 import Models from './pages/Models'
+import WhatsNew from './pages/WhatsNew'
 import AdminSystem from './pages/AdminSystem'
 import Console from './pages/Console'
 import NotFound from './pages/NotFound'
@@ -68,6 +69,9 @@ export default function App() {
         <Route element={<DocsModelsLayout />}>
           <Route path="/docs" element={<Docs />} />
           <Route path="/models" element={<Models />} />
+          <Route path="/whatsnew" element={<WhatsNew />} />
+          <Route path="/whats-new" element={<WhatsNew />} />
+          <Route path="/changelog" element={<WhatsNew />} />
         </Route>
         <Route path="/login" element={<Login />} />
         <Route path="/welcome" element={<Welcome />} />

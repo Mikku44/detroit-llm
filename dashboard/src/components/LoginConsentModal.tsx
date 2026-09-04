@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { Markdown } from './Markdown'
 import { Checkbox } from './ui/checkbox'
 import { Button } from './ui/button'
 import {
@@ -13,7 +12,7 @@ import {
   DialogFooter,
 } from './ui/dialog'
 
-const CONSENT_KEY = 'dlg_legal_consent_v1'
+const CONSENT_KEY = 'dlg_legal_consent_v2'
 const LANG_KEY = 'dlg_legal_lang'
 
 export function recordLegalConsent() {
@@ -66,9 +65,9 @@ export default function LoginConsentModal({
   const [step, setStep] = useState<Step>('terms')
   const [lang, setLang] = useState<Lang>(() => {
     try {
-      return (localStorage.getItem(LANG_KEY) as Lang) || 'th'
+      return (localStorage.getItem(LANG_KEY) as Lang) || 'en'
     } catch {
-      return 'th'
+      return 'en'
     }
   })
   const [termsText, setTermsText] = useState('')
@@ -151,11 +150,11 @@ export default function LoginConsentModal({
           <DialogDescription>{t.desc}</DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 text-sm leading-6 text-zinc-300 prose prose-invert prose-zinc max-w-none prose-headings:text-zinc-100 prose-headings:text-base prose-headings:font-semibold prose-p:text-sm prose-li:text-sm">
+        <div className="flex-1 min-h-0 overflow-y-auto rounded-lg border border-zinc-800 bg-zinc-900/50 p-4">
           {body ? (
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+            <Markdown>{body}</Markdown>
           ) : (
-            <p className="text-zinc-500">{t.loading}</p>
+            <p className="text-sm text-zinc-500">{t.loading}</p>
           )}
         </div>
 

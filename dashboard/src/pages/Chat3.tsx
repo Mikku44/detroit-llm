@@ -6,8 +6,10 @@ import UpgradeDialog from '../components/UpgradeDialog'
 import { FiSend, FiPlus, FiCopy, FiCheck, FiPaperclip, FiThumbsUp, FiThumbsDown, FiChevronDown, FiZap, FiX, FiArrowRight, FiFileText, FiClock, FiImage, FiSearch } from 'react-icons/fi'
 import { useChatHistory } from '../lib/chat-history'
 import IOSLoading from '../components/ios-loading'
+import ImageGenLoading from '../components/ImageGenLoading'
 import { Skeleton } from '../components/ui/skeleton'
 import { motion, AnimatePresence } from 'motion/react'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
 
 interface Cta {
   label: string
@@ -60,9 +62,10 @@ const ALLOWED_CHAT_MODELS = new Set([
   'deepseek-v4-flash',
   'deepseek-v4-flash-vision-exp',
   'qwen3.7-flash',
+  'qwen3.8-flash',
   'z-image-turbo',
   'glm-image',
-  'grok-imagine-image',
+  // 'grok-imagine-image', // hidden for now
   'glm-5.3',
   'glm-5.3-flash',
   'glm-4.5-air',
@@ -94,6 +97,11 @@ const MODEL_META: Record<string, ModelMeta> = {
     desc: 'Text + Image + Video — Alibaba Qwen with thinking mode',
     badges: ['text', 'image', 'video'],
   },
+  'qwen3.8-flash': {
+    name: 'Qwen 3.8 Flash',
+    desc: 'Text + Image + Video — Alibaba Qwen with thinking mode',
+    badges: ['text', 'image', 'video'],
+  },
   'z-image-turbo': {
     name: 'Z-Image Turbo',
     desc: 'Image — DashScope text-to-image',
@@ -104,11 +112,7 @@ const MODEL_META: Record<string, ModelMeta> = {
     desc: 'Image — Z.AI text-to-image (CogView)',
     badges: ['image'],
   },
-  'grok-imagine-image': {
-    name: 'Grok Imagine',
-    desc: 'Image — xAI Grok text-to-image',
-    badges: ['image'],
-  },
+  // 'grok-imagine-image': hidden for now
   'glm-5.3': {
     name: 'GLM-5.3',
     desc: 'Text + Image + Video — Z.AI reasoning flagship',
@@ -178,9 +182,10 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'deepseek-v4-flash': 1000000,
   'deepseek-v4-flash-vision-exp': 1000000,
   'qwen3.7-flash': 1000000,
+  'qwen3.8-flash': 1000000,
   'z-image-turbo': 1000000,
   'glm-image': 1000000,
-  'grok-imagine-image': 1000000,
+  // 'grok-imagine-image': hidden for now
   'glm-5.3': 1000000,
   'glm-5.3-flash': 1000000,
   'glm-4.5-air': 1000000,
@@ -441,7 +446,7 @@ export default function Chat3() {
   const [membersUrl, setMembersUrl] = useState('')
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
-  const [model, setModel] = useState('')
+  const [model, setModel] = useState('qwen3.8-flash')
   const [models, setModels] = useState<string[]>([])
   const [modelOpen, setModelOpen] = useState(false)
   const [modelsLoading, setModelsLoading] = useState(true)
@@ -454,11 +459,15 @@ export default function Chat3() {
   const [attaching, setAttaching] = useState(false)
   const [attachError, setAttachError] = useState<string | null>(null)
   const [isVision, setIsVision] = useState(false)
+  const [busyIsImage, setBusyIsImage] = useState(false)
   const [compacting, setCompacting] = useState(false)
   const [historyLoaded, setHistoryLoaded] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [oldestPos, setOldestPos] = useState<number | null>(null)
+  const [dailyUsed, setDailyUsed] = useState<number | null>(null)
+  const [dailyLimit, setDailyLimit] = useState<number | null>(null)
+  const [maxTokens, setMaxTokens] = useState(4096)
   const { activeId, setActiveId, save: saveConversation, getMessagesPage, appendMessages } = useChatHistory()
   const convSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const modelRef = useRef<HTMLDivElement>(null)
@@ -591,6 +600,29 @@ export default function Chat3() {
   }, [])
 
   useEffect(() => {
+    const fetchLimits = () => {
+      api.getUsageLimits().then((l: any) => {
+        setDailyUsed(typeof l.daily_used === 'number' ? l.daily_used : null)
+        setDailyLimit(typeof l.daily_limit === 'number' ? l.daily_limit : null)
+      }).catch(() => {})
+    }
+    fetchLimits()
+    const iv = window.setInterval(fetchLimits, 60000)
+    return () => window.clearInterval(iv)
+  }, [])
+
+  useEffect(() => {
+    if (!busy) {
+      api.getUsageLimits().then((l: any) => {
+        setDailyUsed(typeof l.daily_used === 'number' ? l.daily_used : null)
+        setDailyLimit(typeof l.daily_limit === 'number' ? l.daily_limit : null)
+      }).catch(() => {})
+    }
+  }, [busy])
+
+  const isDailyExceeded = dailyLimit != null && dailyUsed != null && dailyUsed >= dailyLimit
+
+  useEffect(() => {
     if (!sessionToken) return
     setModelsLoading(true)
     fetch('/v1/models', {
@@ -606,14 +638,11 @@ export default function Chat3() {
         if (!filtered.includes('glm-image') && ALLOWED_CHAT_MODELS.has('glm-image')) {
           filtered = [...filtered, 'glm-image']
         }
-        if (!filtered.includes('grok-imagine-image') && ALLOWED_CHAT_MODELS.has('grok-imagine-image')) {
-          filtered = [...filtered, 'grok-imagine-image']
-        }
         const toShow = filtered.filter((id: string) => ALLOWED_CHAT_MODELS.has(id))
         if (toShow.length) {
           setModels(toShow)
           setModel((cur) =>
-            cur && toShow.includes(cur) ? cur : toShow.find((id: string) => id.includes('flash')) || toShow[0]
+            cur && toShow.includes(cur) ? cur : toShow.includes('qwen3.8-flash') ? 'qwen3.8-flash' : toShow.find((id: string) => id.includes('flash')) || toShow[0]
           )
         }
       })
@@ -675,6 +704,25 @@ export default function Chat3() {
     await addFiles(Array.from(e.dataTransfer.files ?? []))
   }
 
+  const onPasteFiles = async (e: React.ClipboardEvent) => {
+    const files: File[] = []
+    const items = e.clipboardData?.items
+    if (items) {
+      for (const item of Array.from(items)) {
+        if (item.kind === 'file') {
+          const f = item.getAsFile()
+          if (f && (f.type.startsWith('image/') || f.size > 0)) files.push(f)
+        }
+      }
+    }
+    if (!files.length && e.clipboardData?.files?.length) {
+      files.push(...Array.from(e.clipboardData.files))
+    }
+    if (!files.length) return
+    e.preventDefault()
+    await addFiles(files)
+  }
+
   const removeAttachment = (id: string) => {
     setPending((p) => p.filter((a) => a.id !== id))
   }
@@ -689,6 +737,10 @@ export default function Chat3() {
   }
 
   const send = async (textOverride?: string) => {
+    if (isDailyExceeded) {
+      setUpgradeOpen(true)
+      return
+    }
     const text = (textOverride ?? input).trim()
     const attachments = [...pending]
     if ((!text && attachments.length === 0) || busy) return
@@ -744,6 +796,7 @@ export default function Chat3() {
     const IMAGE_ONLY_MODELS = new Set(['z-image-turbo', 'glm-image', 'grok-imagine-image', 'gpt-image-1', 'dall-e-3', 'gemini-2.0-flash-preview-image-generation'])
     const isImageModel = IMAGE_ONLY_MODELS.has(requestModel)
     const doImageGen = imageGen || isImageModel
+    setBusyIsImage(doImageGen)
     const history = doImageGen
       ? []
       : messages
@@ -754,7 +807,7 @@ export default function Chat3() {
           }))
     const body: Record<string, unknown> = {
       model: requestModel,
-      max_tokens: 1024,
+      max_tokens: maxTokens,
       stream: true,
       messages: doImageGen
         ? [{ role: 'user', content: text }]
@@ -809,16 +862,41 @@ export default function Chat3() {
       let lastChunkAt = performance.now()
       let timedOut = false
 
-      const appendToLast = (key: 'content' | 'reasoning', text: string) => {
-        const isUpstreamError = text.includes('⚠️') || /\[13\d{2,3}\]/.test(text) || text.toLowerCase().includes('overloaded') || text.toLowerCase().includes('temporarily overloaded')
+      let pendingContent = ''
+      let pendingReasoning = ''
+      let flushTimer: ReturnType<typeof setTimeout> | null = null
+      const flushPending = () => {
+        if (!pendingContent && !pendingReasoning) return
+        const c = pendingContent
+        const r = pendingReasoning
+        const isErr = c.includes('⚠️') || /\[13\d{2,3}\]/.test(c) || c.toLowerCase().includes('overloaded')
+        pendingContent = ''
+        pendingReasoning = ''
         setMessages((m) => {
           const copy = [...m]
           const idx = copy.length - 1
           if (copy[idx]?.role === 'assistant') {
-            copy[idx] = { ...copy[idx], [key]: (copy[idx][key] ?? '') + text, ...(isUpstreamError && key === 'content' ? { error: true } : {}) }
+            copy[idx] = {
+              ...copy[idx],
+              content: c ? (copy[idx].content ?? '') + c : copy[idx].content,
+              reasoning: r ? (copy[idx].reasoning ?? '') + r : copy[idx].reasoning,
+              ...(isErr && c ? { error: true } : {}),
+            }
           }
           return copy
         })
+      }
+      const scheduleFlush = () => {
+        if (flushTimer) return
+        flushTimer = setTimeout(() => {
+          flushTimer = null
+          flushPending()
+        }, 48)
+      }
+      const appendToLast = (key: 'content' | 'reasoning', text: string) => {
+        if (key === 'content') pendingContent += text
+        else pendingReasoning += text
+        scheduleFlush()
       }
 
       const patchLastMeta = () => {
@@ -946,6 +1024,7 @@ export default function Chat3() {
     } finally {
       setBusy(false)
       setIsVision(false)
+      setBusyIsImage(false)
       abortRef.current = null
     }
   }
@@ -988,6 +1067,7 @@ export default function Chat3() {
 
   const clearChat = () => {
     stop()
+    setBusyIsImage(false)
     setMessages([])
     setActiveId(null)
     navigate('/chat')
@@ -1019,7 +1099,6 @@ export default function Chat3() {
       const data = await res.json()
       const summary = (data?.summary ?? '').trim()
       if (!summary) return false
-      // Replace the whole history with a system summary + the last user turn.
       setMessages([
         { role: 'user', content: `[Summary of earlier conversation]\n\n${summary}`, model },
       ])
@@ -1028,6 +1107,132 @@ export default function Chat3() {
       return false
     } finally {
       setCompacting(false)
+    }
+  }
+
+  const handleContinue = async () => {
+    if (busy || !sessionToken || !model || messages.length === 0) return
+    const lastIdx = messages.length - 1
+    const last = messages[lastIdx]
+    if (last.role !== 'assistant' || !isTruncated(last)) return
+    const baseContent = last.content
+    const baseReasoning = last.reasoning ?? ''
+    const history = messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .map((m) => ({
+        role: m.role,
+        content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
+      }))
+    const body: Record<string, unknown> = {
+      model: freeTier && !(model.includes('flash') || model === 'glm-5.3-flash') ? 'deepseek-v4-flash' : model,
+      max_tokens: maxTokens,
+      stream: true,
+      messages: [...history, { role: 'user', content: 'continue' }],
+    }
+    if (thinking) {
+      ;(body as any)['reasoning'] = { effort }
+      ;(body as any)['output_config'] = { effort }
+    } else {
+      ;(body as any)['reasoning'] = { effort: 'none' }
+    }
+    if (webSearch) (body as any)['web_search'] = true
+    const controller = new AbortController()
+    abortRef.current = controller
+    setBusy(true)
+    let acc = ''
+    let accReasoning = ''
+    let _respModel = model
+    let _finish: string | null | undefined = null
+    let _usage: any = undefined
+    try {
+      const res = await fetch('/api/web/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+      if (!res.ok || !res.body) {
+        const detail = await res.text().catch(() => `HTTP ${res.status}`)
+        const err = friendlyError(res, detail, membersUrl)
+        setMessages((m) => {
+          const copy = [...m]
+          copy[lastIdx] = { ...copy[lastIdx], content: baseContent + '\n\n' + err.content, error: true }
+          return copy
+        })
+        return
+      }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      const startedAt = performance.now()
+      let lastChunkAt = performance.now()
+      while (true) {
+        const now = performance.now()
+        if (now - startedAt > STREAM_MAX_MS || now - lastChunkAt > STREAM_IDLE_MS) {
+          controller.abort()
+          break
+        }
+        const { done, value } = await reader.read()
+        if (done) break
+        lastChunkAt = performance.now()
+        buffer += decoder.decode(value, { stream: true })
+        buffer = parseSse(
+          buffer,
+          (c) => {
+            acc += c
+            setMessages((m) => {
+              const copy = [...m]
+              copy[lastIdx] = { ...copy[lastIdx], content: baseContent + acc, error: acc.includes('⚠️') || /\[13\d{2,3}\]/.test(acc) || undefined }
+              return copy
+            })
+          },
+          (r) => {
+            if (thinking) {
+              accReasoning += r
+              setMessages((m) => {
+                const copy = [...m]
+                copy[lastIdx] = { ...copy[lastIdx], reasoning: baseReasoning + accReasoning }
+                return copy
+              })
+            }
+          },
+          (meta) => {
+            if (meta.model) _respModel = meta.model
+            if (meta.finish_reason != null) _finish = meta.finish_reason
+            if (meta.usage) _usage = meta.usage
+          },
+        )
+      }
+      const durationMs = Math.round(performance.now() - startedAt)
+      setMessages((m) => {
+        const copy = [...m]
+        copy[lastIdx] = { ...copy[lastIdx], content: baseContent + acc, reasoning: baseReasoning + accReasoning || copy[lastIdx].reasoning, model: _respModel || copy[lastIdx].model, finish_reason: _finish, usage: _usage || copy[lastIdx].usage, durationMs }
+        return copy
+      })
+      if (acc) {
+        const merged: Msg = { ...last, content: baseContent + acc, reasoning: baseReasoning + accReasoning || last.reasoning, model: _respModel || last.model, finish_reason: _finish, usage: _usage || last.usage, durationMs }
+        const nextMessages = [...messages.slice(0, lastIdx), merged]
+        if (activeId) {
+          api.updateConversation(activeId, { messages: nextMessages.map((x) => ({ role: x.role, content: x.content, reasoning: x.reasoning, model: x.model, usage: x.usage, finish_reason: x.finish_reason, durationMs: x.durationMs, attachments: x.attachments })) }).catch(() => {})
+        } else {
+          const toSave = nextMessages
+          saveConversation(null, toSave, model || undefined).then((newId) => {
+            if (newId) navigate(`/chat/${newId}`, { replace: true })
+          }).catch(() => {})
+        }
+      }
+    } catch (e) {
+      const aborted = e instanceof DOMException && e.name === 'AbortError'
+      if (!aborted) {
+        setMessages((m) => {
+          const copy = [...m]
+          copy[lastIdx] = { ...copy[lastIdx], content: baseContent + acc + `\n\nSomething went wrong. Please try again.` , error: true }
+          return copy
+        })
+      }
+    } finally {
+      setBusy(false)
+      abortRef.current = null
     }
   }
 
@@ -1271,12 +1476,16 @@ export default function Chat3() {
                           <div className="whitespace-pre-wrap">{m.content}</div>
                         )
                       ) : busy && i === messages.length - 1 ? (
-                        <div className="flex items-center gap-3">
-                          <IOSLoading size={24} />
-                          <span className="text-[13px] text-zinc-400">
-                            {isVision ? 'Looking at the image…' : thinking ? 'Reasoning…' : 'Generating…'}
-                          </span>
-                        </div>
+                        busyIsImage ? (
+                          <ImageGenLoading />
+                        ) : (
+                          <div className="flex items-center gap-3">
+                            <IOSLoading size={24} />
+                            <span className="text-[13px] text-zinc-400">
+                              {isVision ? 'Looking at the image…' : thinking ? 'Reasoning…' : 'Generating…'}
+                            </span>
+                          </div>
+                        )
                       ) : null}
                     </div>
                   )}
@@ -1320,7 +1529,7 @@ export default function Chat3() {
                   )}
                   {m.role === 'assistant' && isTruncated(m) && !busy && (
                     <button
-                      onClick={() => send('continue')}
+                      onClick={handleContinue}
                       className="mt-2 flex items-center gap-1.5 border hover:border-zinc-100/20
                       border-zinc-800 bg-zinc-800 text-zinc-300 text-[12px] font-medium 
                       px-4 py-1.5 rounded-full transition-colors"
@@ -1358,6 +1567,20 @@ export default function Chat3() {
           </div>
         )}
       </div>
+
+      {isDailyExceeded && (
+        <div className="mx-auto w-full max-w-3xl px-2 sm:px-4 pt-2 shrink-0">
+          <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3 backdrop-blur">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-amber-200">Daily limit reached</p>
+              <p className="text-xs text-amber-200/70 truncate">{(dailyUsed ?? 0).toLocaleString()} / {(dailyLimit ?? 0).toLocaleString()} tokens used — resets in 24h</p>
+            </div>
+            <button onClick={() => setUpgradeOpen(true)} className="shrink-0 inline-flex items-center gap-1.5 rounded-full bg-amber-500 px-3.5 py-1.5 text-xs font-semibold text-black hover:bg-amber-400 transition-colors">
+              <FiZap size={12} /> Upgrade
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="mx-auto w-full max-w-3xl px-2 sm:px-4 pb-[calc(0.5rem+env(safe-area-inset-bottom))] sm:pb-0 pt-2 shrink-0">
         <div
@@ -1412,6 +1635,7 @@ export default function Chat3() {
               ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
+              onPaste={onPasteFiles}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
@@ -1419,8 +1643,9 @@ export default function Chat3() {
                 }
               }}
               rows={1}
-              placeholder="Ask anything"
-              className="flex-1 min-w-0 resize-none bg-transparent py-2 text-[16px] sm:text-[15px] leading-5 text-zinc-100 outline-none placeholder:text-zinc-500"
+              placeholder={isDailyExceeded ? "Daily limit reached — upgrade to continue" : "Ask anything"}
+              disabled={isDailyExceeded}
+              className="flex-1 min-w-0 resize-none bg-transparent py-2 text-[16px] sm:text-[15px] leading-5 text-zinc-100 outline-none placeholder:text-zinc-500 disabled:opacity-50"
               style={{ maxHeight: `${Math.round(window.innerHeight * 0.4)}px` }}
             />
             {busy ? (
@@ -1434,9 +1659,9 @@ export default function Chat3() {
             ) : (
               <button
                 onClick={() => send()}
-                disabled={(!input.trim() && pending.length === 0) || attaching}
+                disabled={isDailyExceeded || (!input.trim() && pending.length === 0) || attaching}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) transition-opacity hover:opacity-90 disabled:opacity-30 disabled:hover:opacity-30"
-                title="Send message"
+                title={isDailyExceeded ? "Daily limit reached" : "Send message"}
               >
                 <FiSend size={15} className="-mr-0.5" />
               </button>
@@ -1444,70 +1669,102 @@ export default function Chat3() {
           </div>
         </div>
         {attachError && <p className="mt-1 text-center text-xs text-red-400 px-2">{attachError}</p>}
+        <TooltipProvider>
         <div className="mt-2 flex items-start gap-2">
-          <button
-            onClick={compactChat}
-            className="group relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-transform hover:scale-105 mt-0.5"
-            title={nearLimit ? 'Context nearly full — click to compact' : `Context ${Math.round(usageRatio * 100)}% used — click to compact`}
-          >
-            <svg width="32" height="32" viewBox="0 0 32 32" className="-rotate-90">
-              <circle cx="16" cy="16" r="13" fill="none" strokeWidth="4" className="stroke-zinc-800" />
-              <circle
-                cx="16"
-                cy="16"
-                r="13"
-                fill="none"
-                strokeWidth="4"
-                strokeLinecap="round"
-                strokeDasharray={2 * Math.PI * 13}
-                strokeDashoffset={2 * Math.PI * 13 * (1 - Math.min(1, usageRatio))}
-                className={`transition-all duration-300 ${
-                  nearLimit ? 'stroke-red-500' : usageRatio > 0.6 ? 'stroke-amber-500' : 'stroke-(--primary-color)'
-                }`}
-              />
-            </svg>
-            <span className="pointer-events-none absolute text-[9px] font-medium tabular-nums text-zinc-400">
-              {Math.round(usageRatio * 100)}%
-            </span>
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                onClick={compactChat}
+                className="group relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-transform hover:scale-105 mt-0.5"
+              >
+                <svg width="32" height="32" viewBox="0 0 32 32" className="-rotate-90">
+                  <circle cx="16" cy="16" r="13" fill="none" strokeWidth="4" className="stroke-zinc-800" />
+                  <circle
+                    cx="16"
+                    cy="16"
+                    r="13"
+                    fill="none"
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeDasharray={2 * Math.PI * 13}
+                    strokeDashoffset={2 * Math.PI * 13 * (1 - Math.min(1, usageRatio))}
+                    className={`transition-all duration-300 ${
+                      nearLimit ? 'stroke-red-500' : usageRatio > 0.6 ? 'stroke-amber-500' : 'stroke-(--primary-color)'
+                    }`}
+                  />
+                </svg>
+                <span className="pointer-events-none absolute text-[9px] font-medium tabular-nums text-zinc-400">
+                  {Math.round(usageRatio * 100)}%
+                </span>
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top">{nearLimit ? 'Context nearly full — click to compact conversation' : `Context ${Math.round(usageRatio * 100)}% used (${usedTokens.toLocaleString()} / ${contextLimit.toLocaleString()} tokens) — click to compact`}</TooltipContent>
+          </Tooltip>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none flex-nowrap [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden pb-1 -mx-1 px-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
               <button
                 onClick={() => setThinking((t) => !t)}
                 className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors whitespace-nowrap ${
                   thinking
                     ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
-                    : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+                    : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
                 }`}
-                title="Toggle thinking mode"
-              >
-                <FiZap size={12} />
-                {thinking ? 'Thinking On' : 'Thinking Off'}
-              </button>
+                  >
+                    <FiZap size={12} />
+                    {thinking ? 'Thinking On' : 'Thinking Off'}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">{thinking ? 'Thinking enabled — model shows reasoning steps' : 'Enable thinking to see model reasoning'}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
               <button
                 onClick={() => setImageGen((v) => !v)}
                 className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors whitespace-nowrap ${
                   imageGen
                     ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
-                    : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+                    : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
                 }`}
-                title="Toggle image generation"
-              >
-                <FiImage size={12} />
-                Image Gen
-              </button>
+                  >
+                    <FiImage size={12} />
+                    Image Gen
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">{imageGen ? 'Image generation on — prompt will generate images' : 'Toggle image generation for this prompt'}</TooltipContent>
+              </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
               <button
                 onClick={() => setWebSearch((v) => !v)}
                 className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors whitespace-nowrap ${
                   webSearch
                     ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
-                    : 'border-zinc-800 bg-zinc-900/50 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300'
+                    : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
                 }`}
-                title="Toggle web search"
-              >
-                <FiSearch size={12} />
-                Web Search
-              </button>
+                  >
+                    <FiSearch size={12} />
+                    Web Search
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">{webSearch ? 'Web search enabled — model can browse' : 'Enable web search for up-to-date answers'}</TooltipContent>
+              </Tooltip>
+              <div className="flex items-center gap-0.5 rounded-full border border-zinc-700 bg-zinc-800 p-0.5 shrink-0">
+                {([1024, 2048, 4096, 8192] as const).map((v) => (
+                  <Tooltip key={v}>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={() => setMaxTokens(v)}
+                        className={`h-7 rounded-full px-2.5 text-xs tabular-nums transition-colors ${maxTokens === v ? 'bg-zinc-100 text-black shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
+                      >
+                        {v >= 1024 ? `${v / 1024}k` : v}
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">Max output {v.toLocaleString()} tokens — larger = longer response</TooltipContent>
+                  </Tooltip>
+                ))}
+              </div>
               <AnimatePresence initial={false}>
                 {thinking && (
                   <motion.div
@@ -1518,16 +1775,19 @@ export default function Chat3() {
                     transition={{ type: 'spring', stiffness: 400, damping: 30 }}
                     className="hidden sm:flex items-center gap-1 shrink-0 overflow-hidden"
                   >
-                    <div className="flex items-center gap-0.5 rounded-full border border-zinc-800 bg-zinc-900/50 p-0.5 shrink-0">
+                    <div className="flex items-center gap-0.5 rounded-full border border-zinc-700 bg-zinc-800 p-0.5 shrink-0">
                       {(['low', 'high', 'max'] as const).map((e) => (
-                        <button
-                          key={e}
-                          onClick={() => setEffort(e)}
-                          className={`h-7 rounded-full px-3 text-xs capitalize transition-colors ${effort === e ? 'bg-(--primary-color) text-(--primary-foreground) shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
-                          title={`Reasoning effort: ${e}`}
-                        >
-                          {e}
-                        </button>
+                        <Tooltip key={e}>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={() => setEffort(e)}
+                              className={`h-7 rounded-full px-3 text-xs capitalize transition-colors ${effort === e ? 'bg-(--primary-color) text-(--primary-foreground) shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+                            >
+                              {e}
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">{e === 'low' ? 'Low effort — faster, lighter reasoning' : e === 'high' ? 'High effort — deeper reasoning' : 'Max effort — most thorough reasoning'}</TooltipContent>
+                        </Tooltip>
                       ))}
                     </div>
                   </motion.div>
@@ -1546,16 +1806,19 @@ export default function Chat3() {
                 >
                   <div className="pt-1.5 flex items-center gap-2">
                     <span className="text-[11px] font-medium tracking-wide text-zinc-500 shrink-0">Effort</span>
-                    <div className="flex items-center gap-0.5 rounded-full border border-zinc-800 bg-zinc-900/50 p-0.5">
+                    <div className="flex items-center gap-0.5 rounded-full border border-zinc-700 bg-zinc-800 p-0.5">
                       {(['low', 'high', 'max'] as const).map((e) => (
-                        <button
-                          key={e}
-                          onClick={() => setEffort(e)}
-                          className={`h-7 rounded-full px-3.5 text-xs capitalize transition-colors ${effort === e ? 'bg-(--primary-color) text-(--primary-foreground) shadow-sm' : 'text-zinc-500 hover:text-zinc-300'}`}
-                          title={`Reasoning effort: ${e}`}
-                        >
-                          {e}
-                        </button>
+                        <Tooltip key={e}>
+                          <TooltipTrigger asChild>
+                            <button
+                              onClick={() => setEffort(e)}
+                              className={`h-7 rounded-full px-3.5 text-xs capitalize transition-colors ${effort === e ? 'bg-(--primary-color) text-(--primary-foreground) shadow-sm' : 'text-zinc-400 hover:text-zinc-200'}`}
+                            >
+                              {e}
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side="top">{e === 'low' ? 'Low effort — faster' : e === 'high' ? 'High effort — deeper' : 'Max effort — most thorough'}</TooltipContent>
+                        </Tooltip>
                       ))}
                     </div>
                   </div>
@@ -1564,6 +1827,7 @@ export default function Chat3() {
             </AnimatePresence>
           </div>
         </div>
+        </TooltipProvider>
         <p className="mt-2 text-center text-xs text-zinc-600">
           Model can make mistakes. Check important info.
         </p>

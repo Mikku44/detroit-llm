@@ -39,9 +39,9 @@ import { MarkdownText } from "@/components/assistant-ui/markdown-text";
 import { ToolFallback } from "@/components/assistant-ui/tool-fallback";
 import { CloneThreadShell } from "../components/clone-thread-shell";
 import { createApiAdapter, getSessionToken } from "@/lib/chat-adapter";
+import { api } from "@/lib/api";
 
 const ComposerLogger = () => {
-  // ดึงค่าข้อความปัจจุบันใน Composer
   const text = useAuiState((s) => s.composer.text);
   const isEditing = useAuiState((s) => s.composer.isEditing);
   const isEmpty = useAuiState((s) => s.composer.isEmpty);
@@ -51,6 +51,33 @@ const ComposerLogger = () => {
   }, [text, isEditing, isEmpty]);
 
   return null;
+};
+
+const DailyLimitBanner: FC = () => {
+  const [dailyUsed, setDailyUsed] = useState<number | null>(null);
+  const [dailyLimit, setDailyLimit] = useState<number | null>(null);
+  useEffect(() => {
+    const fetchLimits = () => {
+      api.getUsageLimits().then((l: any) => {
+        setDailyUsed(typeof l.daily_used === 'number' ? l.daily_used : null);
+        setDailyLimit(typeof l.daily_limit === 'number' ? l.daily_limit : null);
+      }).catch(() => {});
+    };
+    fetchLimits();
+    const iv = window.setInterval(fetchLimits, 60000);
+    return () => window.clearInterval(iv);
+  }, []);
+  const exceeded = dailyLimit != null && dailyUsed != null && dailyUsed >= dailyLimit;
+  if (!exceeded) return null;
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-3.5 py-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-amber-900 dark:text-amber-200">Daily limit reached</p>
+        <p className="text-xs text-amber-700 dark:text-amber-200/70 truncate">{(dailyUsed ?? 0).toLocaleString()} / {(dailyLimit ?? 0).toLocaleString()} tokens — resets in 24h</p>
+      </div>
+      <a href="/usage" className="shrink-0 inline-flex items-center gap-1.5 rounded-full bg-amber-500 px-3.5 py-1.5 text-xs font-semibold text-black hover:bg-amber-400 transition-colors">Upgrade</a>
+    </div>
+  );
 };
 
 export const Model: FC = () => {
@@ -92,6 +119,7 @@ export const Model: FC = () => {
               </ThreadPrimitive.Messages>
 
               <ThreadPrimitive.ViewportFooter className="sticky bottom-0 mx-auto mt-auto flex w-full max-w-3xl flex-col gap-2 overflow-visible rounded-t-2xl sm:rounded-t-3xl bg-white pb-[calc(0.5rem+env(safe-area-inset-bottom))] sm:pb-2 dark:bg-black px-1 sm:px-0">
+                <DailyLimitBanner />
                 <ThreadScrollToBottom />
                 <Composer placeholder="Ask anything" />
                 <p className="text-center text-[11px] sm:text-xs text-[#5d5d5d] dark:text-[#afafaf] px-2">

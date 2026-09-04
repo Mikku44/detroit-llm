@@ -206,6 +206,7 @@ async def get_usage_limits(
         r = await db.execute(usage_stmt)
         return int(r.scalar_one())
 
+    daily_used = await sum_tokens_since(now_naive - timedelta(days=1))
     weekly_used = await sum_tokens_since(now_naive - timedelta(days=7))
     monthly_used = await sum_tokens_since(now_naive - timedelta(days=30))
 
@@ -224,16 +225,19 @@ async def get_usage_limits(
     tier = tier_map.get(user.tier_id or "")
     if tier and tier["id"] != "free":
         current_tier_id = tier["id"]
+        daily_limit = (tier["weekly"] + 6) // 7
         weekly_limit = tier["weekly"]
         monthly_limit = tier["monthly"]
         image_quota = tier.get("image_quota", 0)
     elif user.is_owner or user.is_member:
         current_tier_id = None
+        daily_limit = None
         weekly_limit = None
         monthly_limit = None
         image_quota = 10000
     else:
         current_tier_id = "free"
+        daily_limit = (settings.free_weekly_tokens + 6) // 7
         weekly_limit = settings.free_weekly_tokens
         monthly_limit = settings.free_monthly_tokens
         image_quota = tier_map["free"].get("image_quota", 0)
@@ -243,8 +247,10 @@ async def get_usage_limits(
         "plan": plan,
         "is_free": is_free,
         "current_tier_id": current_tier_id,
+        "daily_limit": daily_limit,
         "weekly_limit": weekly_limit,
         "monthly_limit": monthly_limit,
+        "daily_used": daily_used,
         "weekly_used": weekly_used,
         "monthly_used": monthly_used,
         "image_quota": image_quota,

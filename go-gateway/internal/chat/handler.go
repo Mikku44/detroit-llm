@@ -27,6 +27,7 @@ var (
 )
 
 type cachedUsage struct {
+	daily   int64
 	weekly  int64
 	monthly int64
 	ts      time.Time
@@ -35,6 +36,58 @@ type cachedUsage struct {
 var imageOnlyModels = map[string]bool{
 	"z-image-turbo": true, "gpt-image-1": true, "dall-e-3": true, "gemini-2.0-flash-preview-image-generation": true, "glm-image": true, "cogview-4": true, "cogview-4-250304": true,
 	"grok-imagine-image": true, "grok-imagine-image-quality": true, "grok-2-image": true, "grok-image": true, "grok-imagine": true,
+}
+
+var freeTierExtraModels = map[string]bool{
+	"glm-4.5-air": true, "glm-4.7-flashx": true,
+}
+
+var paidFlashExclusions = map[string]bool{
+	"deepseek-v4-flash-vision-exp": true, "glm-5.3": true, "glm-5.3-flash": true,
+}
+
+func isFlashModel(model string) bool {
+	return strings.Contains(strings.ToLower(model), "flash")
+}
+
+func isFreeTierModel(model string) bool {
+	low := strings.ToLower(model)
+	if imageOnlyModels[low] {
+		return true
+	}
+	if paidFlashExclusions[low] {
+		return false
+	}
+	if freeTierExtraModels[low] {
+		return true
+	}
+	// qwen3.7-flash, qwen3.8-flash and any other *flash* model is free-tier.
+	return isFlashModel(low)
+}
+
+func isFreeUser(ctx context.Context, pool *pgxpool.Pool, userID string) bool {
+	var isMember, isOwner, isPaid bool
+	err := pool.QueryRow(ctx, `SELECT is_member, is_owner, is_paid FROM users WHERE id=$1`, userID).Scan(&isMember, &isOwner, &isPaid)
+	if err != nil {
+		return true
+	}
+	return !isMember && !isOwner && !isPaid
+}
+
+func checkFreeModel(ctx context.Context, pool *pgxpool.Pool, userID, model string) error {
+	if model == "" {
+		return nil
+	}
+	if isFreeTierModel(model) {
+		return nil
+	}
+	if imageOnlyModels[strings.ToLower(model)] {
+		return nil
+	}
+	if !isFreeUser(ctx, pool, userID) {
+		return nil
+	}
+	return fmt.Errorf("Free tier only includes the flash and glm-5.3-flash models. Upgrade to a paid membership for pro and other models.")
 }
 
 func isImageModel(model string) bool {
@@ -58,7 +111,7 @@ func HandleChatCompletions(cfg config.Config, pool *pgxpool.Pool) http.HandlerFu
 			forwardToBackend(w, r, cfg.BackendURL)
 			return
 		}
-		isDirect := strings.Contains(model, "deepseek") || strings.HasPrefix(model, "glm-") || strings.HasPrefix(model, "grok") || model == ""
+		isDirect := strings.Contains(model, "deepseek") || strings.HasPrefix(model, "glm-") || strings.HasPrefix(model, "grok") || strings.HasPrefix(model, "qwen") || model == ""
 		if !isDirect {
 			forwardToBackend(w, r, cfg.BackendURL)
 			return
@@ -76,6 +129,12 @@ func HandleChatCompletions(cfg config.Config, pool *pgxpool.Pool) http.HandlerFu
 		}
 		// Tier check (reuse Python logic simplified)
 		if err := checkTier(r.Context(), pool, userID); err != nil {
+			http.Error(w, fmt.Sprintf(`{"detail":%q}`, err.Error()), 403)
+			return
+		}
+		// Free-tier model gate (mirrors Python _free_model_gate):
+		// qwen3.8-flash contains "flash" so it is allowed for all tiers.
+		if err := checkFreeModel(r.Context(), pool, userID, model); err != nil {
 			http.Error(w, fmt.Sprintf(`{"detail":%q}`, err.Error()), 403)
 			return
 		}
@@ -171,9 +230,13 @@ func checkTier(ctx context.Context, pool *pgxpool.Pool, userID string) error {
 		"angel": {10000000, 43450000},
 	}
 	if lim, ok := tierLimits[tierID]; ok && tierID != "free" && tierID != "" {
-		w, m := getUsage(ctx, pool, userID)
+		d, w, m := getUsage(ctx, pool, userID)
+		dailyLim := (lim[0] + 6) / 7
 		if w >= lim[0] {
 			return fmt.Errorf("Weekly limit reached. Upgrade to a higher tier or wait for the weekly window to reset.")
+		}
+		if d >= dailyLim {
+			return fmt.Errorf("Daily limit reached. Upgrade to a higher tier or wait for the daily window to reset.")
 		}
 		if m >= lim[1] {
 			return fmt.Errorf("Monthly limit reached. Upgrade to a higher tier or wait for the monthly window to reset.")
@@ -183,9 +246,12 @@ func checkTier(ctx context.Context, pool *pgxpool.Pool, userID string) error {
 	if isMember || isOwner || isPaid {
 		return nil
 	}
-	w, m := getUsage(ctx, pool, userID)
+	d, w, m := getUsage(ctx, pool, userID)
 	if w >= 100000 {
 		return fmt.Errorf("Weekly limit reached. Upgrade to a paid membership for more usage.")
+	}
+	if d >= (100000+6)/7 {
+		return fmt.Errorf("Daily limit reached. Upgrade to a paid membership for more usage.")
 	}
 	if m >= 435000 {
 		return fmt.Errorf("Monthly limit reached. Upgrade to a paid membership for more usage.")
@@ -193,17 +259,22 @@ func checkTier(ctx context.Context, pool *pgxpool.Pool, userID string) error {
 	return nil
 }
 
-func getUsage(ctx context.Context, pool *pgxpool.Pool, userID string) (int64, int64) {
+func getUsage(ctx context.Context, pool *pgxpool.Pool, userID string) (int64, int64, int64) {
 	usageCache.RLock()
 	if c, ok := usageCache.m[userID]; ok && time.Since(c.ts) < usageTTL {
 		usageCache.RUnlock()
-		return c.weekly, c.monthly
+		return c.daily, c.weekly, c.monthly
 	}
 	usageCache.RUnlock()
 	now := time.Now()
+	dayCut := now.AddDate(0, 0, -1)
 	weekCut := now.AddDate(0, 0, -7)
 	monthCut := now.AddDate(0, 0, -30)
-	var w, mo int64
+	var d, w, mo int64
+	_ = pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(ul.total_tokens),0) FROM usage_logs ul
+		JOIN api_keys ak ON ul.api_key_id=ak.id
+		WHERE ak.user_id=$1 AND ul.created_at >= $2`, userID, dayCut).Scan(&d)
 	_ = pool.QueryRow(ctx, `
 		SELECT COALESCE(SUM(ul.total_tokens),0) FROM usage_logs ul
 		JOIN api_keys ak ON ul.api_key_id=ak.id
@@ -213,13 +284,21 @@ func getUsage(ctx context.Context, pool *pgxpool.Pool, userID string) (int64, in
 		JOIN api_keys ak ON ul.api_key_id=ak.id
 		WHERE ak.user_id=$1 AND ul.created_at >= $2`, userID, monthCut).Scan(&mo)
 	usageCache.Lock()
-	usageCache.m[userID] = cachedUsage{weekly: w, monthly: mo, ts: time.Now()}
+	usageCache.m[userID] = cachedUsage{daily: d, weekly: w, monthly: mo, ts: time.Now()}
 	usageCache.Unlock()
-	return w, mo
+	return d, w, mo
 }
 
 func pickUpstream(model string, cfg config.Config) (string, string) {
 	low := strings.ToLower(model)
+	if strings.HasPrefix(low, "qwen") {
+		// Alibaba Cloud DashScope OpenAI-compatible mode:
+		// {dashscope_url}/compatible-mode/v1/chat/completions
+		if cfg.DashScopeKey != "" {
+			return strings.TrimSuffix(cfg.DashScopeURL, "/") + "/compatible-mode/v1", cfg.DashScopeKey
+		}
+		return "", ""
+	}
 	if strings.HasPrefix(low, "glm-") {
 		if cfg.ZAIKey != "" {
 			return strings.TrimSuffix(cfg.ZAIURL, "/"), cfg.ZAIKey

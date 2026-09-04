@@ -391,7 +391,7 @@ async def _find_api_key(db: AsyncSession, user_id: str) -> ApiKey | None:
     return result.scalar_one_or_none()
 
 
-async def _tier_usage(db: AsyncSession, user_id: str) -> tuple[int, int]:
+async def _tier_usage(db: AsyncSession, user_id: str) -> tuple[int, int, int]:
     if not os.getenv("PYTEST_CURRENT_TEST"):
         cached = _usage_cache.get(user_id)
         if cached is not None:
@@ -409,11 +409,12 @@ async def _tier_usage(db: AsyncSession, user_id: str) -> tuple[int, int]:
         result = await db.execute(stmt)
         return int(result.scalar_one())
 
+    daily = await sum_since(now - timedelta(days=1))
     weekly = await sum_since(now - timedelta(days=7))
     monthly = await sum_since(now - timedelta(days=30))
     if not os.getenv("PYTEST_CURRENT_TEST"):
-        _usage_cache[user_id] = (weekly, monthly)
-    return weekly, monthly
+        _usage_cache[user_id] = (daily, weekly, monthly)
+    return daily, weekly, monthly
 
 
 def _invalidate_usage_cache(user_id: str) -> None:
@@ -452,11 +453,17 @@ async def require_access(
     # the nomad limits once they run out.
     tier = next((t for t in TIER_OPTIONS if t["id"] == user.tier_id), None)
     if tier and tier["id"] != "free":
-        weekly_used, monthly_used = await _tier_usage(db, user_id)
+        daily_used, weekly_used, monthly_used = await _tier_usage(db, user_id)
+        daily_limit = (tier["weekly"] + 6) // 7
         if weekly_used >= tier["weekly"]:
             raise HTTPException(
                 status_code=403,
                 detail="Weekly limit reached. Upgrade to a higher tier or wait for the weekly window to reset.",
+            )
+        if daily_used >= daily_limit:
+            raise HTTPException(
+                status_code=403,
+                detail="Daily limit reached. Upgrade to a higher tier or wait for the daily window to reset.",
             )
         if monthly_used >= tier["monthly"]:
             raise HTTPException(
@@ -477,11 +484,17 @@ async def require_access(
         await db.commit()
         return user_id
 
-    weekly_used, monthly_used = await _tier_usage(db, user_id)
+    daily_used, weekly_used, monthly_used = await _tier_usage(db, user_id)
+    daily_limit = (settings.free_weekly_tokens + 6) // 7
     if weekly_used >= settings.free_weekly_tokens:
         raise HTTPException(
             status_code=403,
             detail="Weekly limit reached. Upgrade to a paid membership for more usage.",
+        )
+    if daily_used >= daily_limit:
+        raise HTTPException(
+            status_code=403,
+            detail="Daily limit reached. Upgrade to a paid membership for more usage.",
         )
     if monthly_used >= settings.free_monthly_tokens:
         raise HTTPException(
@@ -1505,11 +1518,6 @@ async def _detect_image_intent(messages: list) -> bool:
     return _wants_image({"messages": messages})
 
 
-def _image_data_uri(prompt: str, model: str, size: str) -> str:
-    seed_text = f"{prompt}|{model}|{size}"
-    return "data:image/svg+xml;base64," + _mock_image_b64(prompt, model, size, seed_text)
-
-
 _IMAGE_FETCH_TIMEOUT = 20
 _IMAGE_GEN_TIMEOUT = 120
 _UNSPLASH_SEARCH_API = "https://api.unsplash.com/search/photos"
@@ -1755,11 +1763,11 @@ async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> d
     Provider order (settings.image_provider):
       - "grok": xAI Grok Imagine (needs GROK_API_KEY / XAI_API_KEY)
       - "dashscope": real AI generation via z-image-turbo (needs DASHSCOPE_API_KEY)
-      - "unsplash": Unsplash Search API (needs UNSPLASH_ACCESS_KEY)
+      - "unsplash": Unsplash Search API (needs UNSplash_ACCESS_KEY)
       - "loremflickr": free keyword API, no key required
-      - "auto": try grok -> zai -> dashscope -> unsplash -> loremflickr -> mock
-      - "mock" (default): deterministic offline SVG, no network
-    Any provider failure falls through to the next candidate, ending at mock.
+      - "auto": try grok -> zai -> dashscope -> unsplash -> loremflickr
+    Raises RuntimeError when no provider is configured or all fail — there is
+    no mock/placeholder fallback.
     """
     if model and model.lower() in ("glm-image", "cogview-4", "cogview-4-250304"):
         try:
@@ -1775,19 +1783,22 @@ async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> d
             return ref
         except Exception as e:
             print(f"  [image] grok {model.lower()} failed ({type(e).__name__}: {e})")
-    provider = (settings.image_provider or "mock").strip().lower()
+    provider = (settings.image_provider or "auto").strip().lower()
     if provider == "auto":
-        candidates = ("grok", "zai", "dashscope", "unsplash", "loremflickr", "mock")
+        candidates = ("grok", "zai", "dashscope", "unsplash", "loremflickr")
     elif provider == "grok":
-        candidates = ("grok", "zai", "dashscope", "mock")
+        candidates = ("grok", "zai", "dashscope")
     elif provider == "dashscope":
-        candidates = ("dashscope", "mock")
+        candidates = ("dashscope",)
     elif provider == "zai":
-        candidates = ("zai", "mock")
+        candidates = ("zai",)
     elif provider in ("unsplash", "loremflickr"):
-        candidates = (provider, "mock")
+        candidates = (provider,)
     else:
-        candidates = ("mock",)
+        raise RuntimeError(
+            f"Unknown image provider {provider!r}. "
+            "Set IMAGE_PROVIDER to auto/grok/zai/dashscope/unsplash/loremflickr."
+        )
 
     for candidate in candidates:
         if candidate == "grok":
@@ -1837,7 +1848,10 @@ async def _image_source(prompt: str, model: str, size: str, seed_text: str) -> d
             except Exception as e:
                 print(f"  [image] loremflickr failed ({type(e).__name__}: {e})")
 
-    return {"ref": _image_data_uri(prompt, model, size), "kind": "data_uri"}
+    raise RuntimeError(
+        "Image generation unavailable: no image provider is configured or all providers failed. "
+        "Set GROK_API_KEY, DASHSCOPE_API_KEY, or UNSPLASH_ACCESS_KEY (or IMAGE_PROVIDER=loremflickr)."
+    )
 
 
 def _parse_image_toolcall(content: str) -> dict | None:
@@ -2008,11 +2022,14 @@ async def _proxy_image_tool_loop(
     # Enforce the per-tier monthly image quota before generating.
     await _check_image_quota(db, user_id)
 
-    # If no DeepSeek key, generate straight from the prompt (offline demo still works).
+    # If no DeepSeek key, generate straight from the prompt via image providers.
     if not settings.deepseek_api_key:
         prompt = last_text.strip()
-        image_ref = await _image_source(prompt, model, "1024x1024", f"{prompt}|{model}|1024x1024")
-        final_text = "สร้างรูปให้แล้วครับ (mock)"
+        try:
+            image_ref = await _image_source(prompt, model, "1024x1024", f"{prompt}|{model}|1024x1024")
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        final_text = "สร้างรูปให้แล้วครับ"
         await _log_image_usage(db, user_id, model)
         if is_stream:
             return StreamingResponse(
@@ -2123,7 +2140,10 @@ async def _proxy_image_tool_loop(
         print(f"  [image-tool] no image_gen envelope -> using raw prompt {last_text[:80]!r}")
         final_text = raw_content or "สร้างรูปให้แล้วครับ"
         prompt = last_text.strip()
-        image_ref = await _image_source(prompt, model, "1024x1024", f"{prompt}|{model}|1024x1024")
+        try:
+            image_ref = await _image_source(prompt, model, "1024x1024", f"{prompt}|{model}|1024x1024")
+        except RuntimeError as e:
+            raise HTTPException(status_code=503, detail=str(e))
         if is_stream:
             return StreamingResponse(
                 _stream_image_markdown(final_text, image_ref["ref"], created_time, model),
@@ -2137,7 +2157,10 @@ async def _proxy_image_tool_loop(
     # Execute the tool with the optimized prompt the model produced.
     prompt = str(tool_result.get("content") or last_text).strip()
     size = str(tool_result.get("size") or "1024x1024")
-    image_ref = await _image_source(prompt, model, size, f"{prompt}|{model}|{size}")
+    try:
+        image_ref = await _image_source(prompt, model, size, f"{prompt}|{model}|{size}")
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
 
     # Round 2: give the model the tool result and let it compose the final answer.
     round2_messages = _text_only_messages(body.get("messages") or []) + [
@@ -2480,7 +2503,7 @@ async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: d
     body.pop("image_gen", None)
     body.pop("web_search", None)
 
-    # Media routing: qwen3.7-flash & glm-5.3-flash support [text,image,video],
+    # Media routing: qwen3.7-flash, qwen3.8-flash & glm-5.3-flash support [text,image,video],
     # deepseek-v4-flash-vision-exp supports [text,image] only.
     has_image = _has_image_content(body)
     has_video = _has_video_content(body)
@@ -2489,7 +2512,7 @@ async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: d
             if has_video:
                 raise HTTPException(
                     status_code=400,
-                    detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or glm-5.3-flash for video.",
+                    detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash, qwen3.8-flash or glm-5.3-flash for video.",
                 )
             if not settings.deepseek_api_key:
                 raise HTTPException(
@@ -2651,85 +2674,12 @@ async def _handle_chat_completions(db: AsyncSession, user_id: str, body: dict):
 
 
 # ---------------------------------------------------------------------------
-# Mock image generation (placeholder SVG, no upstream API required)
+# Image seed helper (deterministic Unsplash paging / loremflickr lock id)
 # ---------------------------------------------------------------------------
-
-_IMAGE_PALETTES = [
-    ("#6366f1", "#a855f7", "#f0abfc"),  # indigo -> fuchsia
-    ("#0ea5e9", "#22d3ee", "#99f6e4"),  # sky -> teal
-    ("#f59e0b", "#ef4444", "#fb923c"),  # amber -> red
-    ("#10b981", "#22c55e", "#bef264"),  # emerald -> lime
-    ("#3b82f6", "#8b5cf6", "#c4b5fd"),  # blue -> violet
-]
 
 
 def _image_seed(seed_text: str) -> int:
     return int(hashlib.md5(seed_text.encode("utf-8")).hexdigest()[:8], 16)
-
-
-def _mock_image_svg(prompt: str, model: str, size: str, seed_text: str) -> str:
-    """Return an SVG placeholder derived deterministically from the prompt."""
-    seed = _image_seed(seed_text)
-    palette = _IMAGE_PALETTES[seed % len(_IMAGE_PALETTES)]
-    angle = seed % 360
-    c1, c2, c3 = palette
-
-    if size == "1024x1024":
-        w, h = 1024, 1024
-    elif size == "512x512":
-        w, h = 512, 512
-    elif size == "256x256":
-        w, h = 256, 256
-    elif size == "1792x1024":
-        w, h = 1792, 1024
-    elif size == "1024x1792":
-        w, h = 1024, 1792
-    else:
-        try:
-            w, h = (int(x) for x in size.split("x")[:2])
-        except (ValueError, AttributeError):
-            w, h = 1024, 1024
-
-    r1, r2 = w // 4, h // 4
-    cx = (seed % (w - r2)) + r2
-    cy = (seed * 3 % (h - r2)) + r2
-
-    title = ""
-    lines: list[str] = []
-    if prompt:
-        from html import escape as _esc
-
-        words = _esc(prompt[:200]).split()
-        while words:
-            line, words = " ".join(words[:8]), words[8:]
-            lines.append(line)
-        tspans = "<tspan x=\"50%\" dy=\"0\">" + "</tspan><tspan x=\"50%\" dy=\"1.35em\">".join(lines) + "</tspan>"
-        title = '<text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="white" font-family="system-ui, sans-serif" font-size="' + str(max(28, w // 40)) + '" font-weight="700" opacity="0.95">' + tspans + "</text>"
-
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}">
-  <defs>
-    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="{c1}" />
-      <stop offset="55%" stop-color="{c2}" />
-      <stop offset="100%" stop-color="{c3}" />
-    </linearGradient>
-    <radialGradient id="glow" cx="50%" cy="50%" r="60%">
-      <stop offset="0%" stop-color="white" stop-opacity="0.35" />
-      <stop offset="100%" stop-color="white" stop-opacity="0" />
-    </radialGradient>
-  </defs>
-  <rect width="100%" height="100%" fill="url(#bg)" />
-  <circle cx="{cx}" cy="{cy}" r="{r1}" fill="white" opacity="0.12" />
-  <circle cx="{w - cx}" cy="{h - cy}" r="{r2}" fill="white" opacity="0.10" />
-  <rect width="100%" height="100%" fill="url(#glow)" />
-  <text x="32" y="{h - 48}" fill="white" opacity="0.6" font-family="monospace, monospace" font-size="{max(20, w // 64)}">mock :: {model} :: {size}</text>
-  {title}
-</svg>"""
-
-
-def _mock_image_b64(prompt: str, model: str, size: str, seed_text: str) -> str:
-    svg = _mock_image_svg(prompt, model, size, seed_text).encode("utf-8")
-    return base64.b64encode(svg).decode("ascii")
 
 
 @router.post("/v1/images/generations")
@@ -2739,9 +2689,9 @@ async def image_generations(
     user_id: str = Depends(require_access),
     db: AsyncSession = Depends(get_db),
 ):
-    """OpenAI-compatible image generation. Returns a deterministic placeholder
-    when no upstream image API is configured (mock mode), so clients that call
-    /v1/images/generations always get a usable image response."""
+    """OpenAI-compatible image generation. Requires a configured upstream
+    image provider (grok/zai/dashscope/unsplash/loremflickr) — returns 503
+    when unavailable instead of a placeholder image."""
     body = await request.json()
     if not isinstance(body, dict) or not body:
         raise HTTPException(status_code=400, detail="Request body must be a JSON object")
@@ -2782,7 +2732,10 @@ async def image_generations(
     async with _IMAGE_SEMAPHORE:
         for i in range(count):
             seed_text = f"{prompt}|{model}|{size}|{i}"
-            refs.append((seed_text, await _image_source(prompt, model, size, seed_text)))
+            try:
+                refs.append((seed_text, await _image_source(prompt, model, size, seed_text)))
+            except RuntimeError as e:
+                raise HTTPException(status_code=503, detail=str(e))
 
     data = []
     for seed_text, ref in refs:
@@ -2793,8 +2746,20 @@ async def image_generations(
                     data.append({"b64_json": base64.b64encode(raw).decode("ascii")})
                     continue
                 except Exception as e:
-                    print(f"  [image] download failed ({type(e).__name__}: {e}) -> mock b64")
-            data.append({"b64_json": _mock_image_b64(prompt, model, size, seed_text)})
+                    print(f"  [image] download failed ({type(e).__name__}: {e})")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Image generated but download failed: {e}",
+                    )
+            else:
+                try:
+                    raw, _ctype = await _download_image_bytes(ref["ref"])
+                    data.append({"b64_json": base64.b64encode(raw).decode("ascii")})
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Image download failed: {e}",
+                    )
         else:
             data.append({"url": ref["ref"]})
     data[0]["revised_prompt"] = prompt
@@ -2828,7 +2793,7 @@ async def responses_api(
     if has_image or has_video:
         if model == "deepseek-v4-flash-vision-exp":
             if has_video:
-                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or glm-5.3-flash for video.")
+                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash, qwen3.8-flash or glm-5.3-flash for video.")
         elif _supports_native_vision(model):
             pass
         else:
@@ -3282,7 +3247,7 @@ async def anthropic_messages(
     if has_image or has_video:
         if model == "deepseek-v4-flash-vision-exp":
             if has_video:
-                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash or glm-5.3-flash for video.")
+                raise HTTPException(status_code=400, detail="deepseek-v4-flash-vision-exp supports [text,image] only — use qwen3.7-flash, qwen3.8-flash or glm-5.3-flash for video.")
         elif _supports_native_vision(model):
             pass
         else:
@@ -4268,6 +4233,12 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             "type": "model",
             "id": "qwen3.7-flash",
             "display_name": "qwen3.7-flash",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "qwen3.8-flash",
+            "display_name": "qwen3.8-flash",
         },
         {
             "object": "model",

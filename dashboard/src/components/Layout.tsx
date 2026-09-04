@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useAuth } from '../lib/auth'
 import { useIsMobile } from '../hooks/use-mobile'
-import { LogOut, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard, Cookie, Users, CreditCard, MoreHorizontal, X } from 'lucide-react'
+import { LogOut, ArrowUpRight, Activity, Plus, Trash2, MessageCircle, Calendar, Tv, Mail, IdCard, Cookie, Users, CreditCard, MoreHorizontal, X, Sparkles } from 'lucide-react'
 import { HiOutlineHome, HiOutlineKey, HiOutlineChartBar, HiOutlineBookOpen, HiOutlineChat, HiOutlineShieldCheck, HiOutlineTerminal, HiOutlineCube } from 'react-icons/hi'
 import { ChatHistoryProvider, useChatHistory } from '../lib/chat-history'
 import Avatar from './Avatar'
@@ -69,6 +69,7 @@ const links = [
   { to: '/usage', label: 'Usage', icon: HiOutlineChartBar },
   { to: '/docs', label: 'Docs', icon: HiOutlineBookOpen },
   { to: '/models', label: 'Models', icon: HiOutlineCube },
+  { to: '/whatsnew', label: "What's New", icon: Sparkles },
 ]
 
 const adminLinks = [

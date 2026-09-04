@@ -13,8 +13,9 @@ os.environ["JWT_SECRET"] = "test-jwt-secret-1234567890-abcdefghijklmnopqrstuvwxy
 os.environ["RATE_LIMIT_PER_MINUTE"] = "3600"
 os.environ["DEEPSEEK_API_KEY"] = ""
 os.environ["GEMINI_API_KEY"] = ""
-# Hermetic tests: never hit external image providers (Unsplash/loremflickr).
-os.environ["IMAGE_PROVIDER"] = "mock"
+# Hermetic tests: never hit keyed external image providers (grok/zai/dashscope/unsplash).
+# loremflickr builds a deterministic URL with no network call.
+os.environ["IMAGE_PROVIDER"] = "loremflickr"
 os.environ["UNSPLASH_ACCESS_KEY"] = ""
 # Keep tests hermetic: a local backend/.env may set real OAuth values.
 os.environ["OWNER_REFRESH_TOKEN"] = ""

@@ -12,9 +12,9 @@ function useLegalLang(): [Lang, (l: Lang) => void] {
   const [lang, setLangState] = useState<Lang>(() => {
     try {
       const v = localStorage.getItem(LANG_KEY) as Lang | null
-      return v === 'en' || v === 'th' ? v : 'th'
+      return v === 'en' || v === 'th' ? v : 'en'
     } catch {
-      return 'th'
+      return 'en'
     }
   })
   const setLang = (next: Lang) => {

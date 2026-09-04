@@ -17,6 +17,7 @@ export default function PublicNavbar() {
             <a href="/#faq" className="hover:text-zinc-100">FAQ</a>
             <Link to="/docs" className="hover:text-zinc-100">Docs</Link>
             <Link to="/models" className="hover:text-zinc-100">Models</Link>
+            <Link to="/whatsnew" className="hover:text-zinc-100">What&apos;s New</Link>
           </nav>
         </div>
         <div className="flex items-center gap-2">

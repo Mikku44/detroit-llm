@@ -14,6 +14,7 @@ import { CheckIcon, CopyIcon } from "lucide-react";
 
 import { TooltipIconButton } from "src/components/assistant-ui/tooltip-icon-button";
 import { cn } from "../../lib/utils";
+import CodeArtifact, { isPreviewableLanguage } from "../chat/CodeArtifact";
 
 const MarkdownTextImpl = () => {
   return (
@@ -242,8 +243,16 @@ const defaultComponents = memoizeMarkdownComponents({
       {...props}
     />
   ),
-  code: function Code({ className, ...props }) {
+  code: function Code({ className, children, ...props }) {
     const isCodeBlock = useIsMarkdownCodeBlock();
+    if (isCodeBlock) {
+      const match = /language-(\w+)/.exec(className || "");
+      const language = match?.[1] ?? "text";
+      const code = String(children ?? "").replace(/\n$/, "");
+      if (isPreviewableLanguage(language) && code.trim().length > 0) {
+        return <CodeArtifact language={language} code={code} />;
+      }
+    }
     return (
       <code
         className={cn(
@@ -252,7 +261,9 @@ const defaultComponents = memoizeMarkdownComponents({
           className,
         )}
         {...props}
-      />
+      >
+        {children}
+      </code>
     );
   },
   CodeHeader,

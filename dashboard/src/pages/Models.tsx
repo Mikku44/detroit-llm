@@ -25,10 +25,11 @@ const MODELS: ModelInfo[] = [
   { id: 'claude-sonnet-5', tag: 'Extra Claude', desc: 'Claude Sonnet 5 — flagship', ctx: '200K', maxOut: '28K', tier: 'paid' },
   { id: 'claude-fable-5-1', tag: 'Extra Claude', desc: 'Claude Fable 5.1 — creative/long-form', ctx: '200K', maxOut: '28K', tier: 'paid' },
   { id: 'qwen3.7-flash', tag: 'Fast', desc: 'Qwen 3.7 Flash — fast with optional thinking mode', ctx: '128K', maxOut: '—', tier: 'free' },
+  { id: 'qwen3.8-flash', tag: 'Fast', desc: 'Qwen 3.8 Flash — fast with optional thinking mode', ctx: '128K', maxOut: '—', tier: 'free' },
   { id: 'gemini-2.5-flash', tag: 'Vision', desc: 'Gemini 2.5 Flash — native vision text+image', ctx: '1M', maxOut: '—', tier: 'free' },
   { id: 'z-image-turbo', tag: 'Image', desc: 'z-image-turbo (DashScope) — text-to-image generation', ctx: '1024×1024', maxOut: '—', tier: 'paid' },
   { id: 'glm-image', tag: 'Image', desc: 'glm-image (Z.AI CogView) — text-to-image generation', ctx: '1024×1024', maxOut: '—', tier: 'paid' },
-  { id: 'grok-imagine-image', tag: 'Image', desc: 'grok-imagine-image (xAI Grok) — text-to-image generation', ctx: '1024×1024', maxOut: '—', tier: 'paid' },
+  // { id: 'grok-imagine-image', tag: 'Image', desc: 'grok-imagine-image (xAI Grok) — text-to-image generation', ctx: '1024×1024', maxOut: '—', tier: 'paid' }, // hidden for now
   { id: 'glm-5.3', tag: 'Reasoning', desc: 'GLM-5.3 — 1M context / 128K max (131,072)', ctx: '1M', maxOut: '128K', tier: 'paid' },
   { id: 'glm-5.3-flash', tag: 'Reasoning', desc: 'GLM-5.3-Flash — 1M context / 128K max (131,072)', ctx: '1M', maxOut: '128K', tier: 'paid' },
   { id: 'glm-4.5-air', tag: 'Reasoning', desc: 'GLM-4.5-Air — lightweight reasoning 65,536 / 98,304', ctx: '98K', maxOut: '98K', tier: 'free' },

@@ -1,7 +1,7 @@
 "use client"
 import { useState, useCallback, useEffect, useRef } from "react"
 import { cn } from "@/lib/utils"
-import { motion, useMotionValue, useReducedMotion } from "motion/react"
+import { motion, useAnimationFrame, useMotionValue, useReducedMotion, useTransform } from "motion/react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from "@/components/ui/dialog"
 import { Sparkles, Bell, ArrowUpRight, Image as ImageIcon, ThumbsUp, Trophy, ChevronUp, ChevronDown } from "lucide-react"
 import AgentAvatar from "@/components/smoothui/agent-avatar"
@@ -19,9 +19,29 @@ export interface UpdateItem {
 
 export const whatsNewItems: UpdateItem[] = [
   {
+    id: "9",
+    title: "Custom max output tokens",
+    description: "Set your own response length in chat — click Custom next to the 1k / 2k / 4k / 8k presets and type any value from 256 to 131,072 tokens.",
+    tag: "CHAT",
+    date: "Sep 4, 2026",
+    image: "/whatsnew/output-token.png",
+    href: "/chat",
+    icon: Sparkles,
+  },
+  {
+    id: "8",
+    title: "New model: Qwen 3.8 Flash",
+    description: "Qwen 3.8 Flash is here — fast responses with optional thinking mode for stronger reasoning. Try it in chat or via the API.",
+    tag: "MODELS",
+    date: "Sep 4, 2026",
+    image: "/whatsnew/Qwen3.8-flash_banner_en.jpg",
+    href: "/models",
+    icon: Sparkles,
+  },
+  {
     id: "7",
     title: "Claude Extra — Haiku 4.5 / Sonnet 4.6 / 5 / Fable 5.1",
-    description: "Claude API ตรงผ่าน Anthropic — ต้องแพ็ก Extra Claude (Dreamer Extra 100K Input / 28K Output) concurrent limit 2",
+    description: "Direct Claude API via Anthropic — requires an Extra Claude pack (Dreamer Extra 100K input / 28K output), concurrent limit 2",
     tag: "EXTRA",
     date: "Sep 2, 2026",
     image: "/whatsnew/claude.jpg",
@@ -31,7 +51,7 @@ export const whatsNewItems: UpdateItem[] = [
   {
     id: "6",
     title: "Models Ranking — Compare Top Models",
-    description: "จัดอันดับโมเดลยอดนิยมตามการใช้งานจริง ดูคะแนนและเลือกโมเดลที่เหมาะกับงานคุณได้ที่หน้า Models",
+    description: "Rank popular models by real usage — see scores and pick the right model for your task on the Models page",
     tag: "NEW",
     date: "Sep 2, 2026",
     image: "/whatsnew/model-ranking.png",
@@ -40,8 +60,8 @@ export const whatsNewItems: UpdateItem[] = [
   },
   {
     id: "5",
-    title: "Like / Dislike ข้อความแชต",
-    description: "กด Like / Dislike ให้ทุกข้อความในแชตได้แล้ว เพื่อช่วยปรับคุณภาพโมเดลและบันทึก feedback",
+    title: "Like / Dislike chat messages",
+    description: "You can now Like / Dislike every chat message to help improve model quality and record feedback",
     tag: "CHAT",
     date: "Sep 1, 2026",
     image: "/whatsnew/like-button.png",
@@ -50,8 +70,8 @@ export const whatsNewItems: UpdateItem[] = [
   },
   {
     id: "4",
-    title: "โมเดลใหม่: GLM-5.3 + GLM-Image",
-    description: "เพิ่ม glm-5.3 (reasoning flagship 1M context) และ glm-image / cogview-4 / cogview-4-250304 สร้างรูป 1024x1024 ผ่าน Z.AI",
+    title: "New models: GLM-5.3 + GLM-Image",
+    description: "Added glm-5.3 (flagship reasoning, 1M context) plus glm-image / cogview-4 / cogview-4-250304 — 1024x1024 image generation via Z.AI",
     tag: "MODELS",
     date: "Sep 1, 2026",
     image: "/whatsnew/newmodel.png",
@@ -67,13 +87,19 @@ const SCALE_FACTOR = 0.08
 const MIN_SCALE = 0.08
 const MAX_SCALE = 2
 const HOVER_SCALE_MULTIPLIER = 1.02
+const AUTOPLAY_MS = 4000
+const RING_R = 12.5
+const RING_C = 2 * Math.PI * RING_R
 
 function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateItem[]; cardHeight?: number; className?: string }) {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
   const [isScrolling, setIsScrolling] = useState(false)
+  const [paused, setPaused] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const scrollY = useMotionValue(0)
+  const progress = useMotionValue(0)
+  const ringOffset = useTransform(progress, [0, 1], [RING_C, 0])
   const lastScrollTime = useRef(0)
   const shouldReduceMotion = useReducedMotion()
   const [isMobile, setIsMobile] = useState(false)
@@ -151,6 +177,24 @@ function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateIt
     return () => c.removeEventListener("wheel", handleWheel)
   }, [handleWheel])
 
+  useAnimationFrame((_, delta) => {
+    if (paused || shouldReduceMotion || totalItems < 2) return
+    const next = progress.get() + delta / AUTOPLAY_MS
+    if (next >= 1) {
+      progress.set(0)
+      setCurrentIndex((prev) => {
+        const n = prev >= totalItems - 1 ? 0 : prev + 1
+        scrollY.set(n * SNAP_DISTANCE)
+        lastScrollTime.current = Date.now()
+        return n
+      })
+    } else {
+      progress.set(next)
+    }
+  })
+
+  useEffect(() => { progress.set(0) }, [currentIndex, progress])
+
   const getCardTransform = useCallback((index: number) => {
     const offsetIndex = index - currentIndex
     const isBehindCurrent = currentIndex > index
@@ -172,6 +216,10 @@ function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateIt
         onKeyDown={handleKeyDown}
         onTouchStart={handleTouchStart}
         onTouchEnd={handleTouchEnd}
+        onMouseEnter={() => setPaused(true)}
+        onMouseLeave={() => setPaused(false)}
+        onFocus={() => setPaused(true)}
+        onBlur={() => setPaused(false)}
         className="relative h-full w-full outline-none select-none"
         style={{ minHeight: `${effectiveHeight + CARD_PADDING}px`, perspective: "1000px", perspectiveOrigin: "center 60%", touchAction: "pan-y" }}
       >
@@ -190,12 +238,17 @@ function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateIt
           className="absolute bottom-8 left-1/2 z-30 -translate-x-1/2 rounded-full border border-zinc-700 bg-zinc-900/90 p-1.5 text-zinc-300 shadow-lg backdrop-blur hover:bg-zinc-800 hover:text-zinc-100 disabled:opacity-30 disabled:cursor-not-allowed transition-all"
         >
           <ChevronDown size={14} />
+          {!shouldReduceMotion && totalItems > 1 && (
+            <svg className="absolute -inset-1 h-[calc(100%+8px)] w-[calc(100%+8px)] -rotate-90" viewBox="0 0 28 28" aria-hidden="true">
+              <circle cx="14" cy="14" r={RING_R} fill="none" strokeWidth="2" className="stroke-zinc-700" />
+              <motion.circle cx="14" cy="14" r={RING_R} fill="none" strokeWidth="2" strokeLinecap="round" className="stroke-[var(--primary-color)]" strokeDasharray={RING_C} style={{ strokeDashoffset: ringOffset }} />
+            </svg>
+          )}
         </button>
         {items.map((item, i) => {
           const t = getCardTransform(i)
           const isActive = i === currentIndex
           const isHovered = hoveredIndex === i
-          const Icon = item.icon || Sparkles
           return (
             <motion.div
               key={item.id}
@@ -235,14 +288,7 @@ function WhatsNewStack({ items, cardHeight = 360, className }: { items: UpdateIt
                   </div>
                 </div>
                 <div className="bg-zinc-900 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-[var(--primary-color)]/15 border border-[var(--primary-color)]/20">
-                        <Icon size={14} className="text-[var(--primary-color)]" />
-                      </span>
-                      <h4 className="text-sm font-semibold text-zinc-100 leading-tight">{item.title}</h4>
-                    </div>
-                  </div>
+                  <h4 className="text-sm text-zinc-100 leading-tight">{item.title}</h4>
                   <p className="mt-2 text-xs leading-relaxed text-zinc-400 line-clamp-2">{item.description}</p>
                   {item.href && (
                     <a href={item.href} className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-[var(--primary-color)] hover:underline">
