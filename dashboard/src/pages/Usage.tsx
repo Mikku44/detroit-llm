@@ -165,7 +165,7 @@ export default function Usage() {
   useEffect(() => {
     setLoading(true)
     loadUsage()
-    const id = setInterval(loadUsage, 5000)
+    const id = setInterval(loadUsage, 30000)
     const onVisibility = () => {
       if (document.visibilityState === 'visible') loadUsage()
     }
@@ -190,7 +190,7 @@ export default function Usage() {
     setLimitsRefreshing(true)
     const start = Date.now()
     try {
-      const data = await api.getUsageLimits()
+      const data = await api.getUsageLimits(true)
       setLimits(data)
       toast.success('Tokens refreshed', { description: `${formatTokens(data.weekly_used)} / ${formatTokens(data.weekly_limit ?? 0)} weekly · ${formatTokens(data.monthly_used)} / ${formatTokens(data.monthly_limit ?? 0)} monthly` })
     } catch (e: any) {

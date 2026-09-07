@@ -33,6 +33,31 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
   return res.json().catch(() => { throw new Error(`Invalid JSON for ${path}`) })
 }
 
+const LIMITS_TTL_MS = 5 * 60 * 1000
+let _limitsCache: any = null
+let _limitsCacheAt = 0
+let _limitsInflight: Promise<any> | null = null
+
+function getCachedUsageLimits(forceRefresh = false): Promise<any> {
+  const now = Date.now()
+  if (!forceRefresh && _limitsCache && now - _limitsCacheAt < LIMITS_TTL_MS) {
+    return Promise.resolve(_limitsCache)
+  }
+  if (!forceRefresh && _limitsInflight) return _limitsInflight
+  const p: Promise<any> = request('/admin/usage/limits').then((data) => {
+    _limitsCache = data
+    _limitsCacheAt = Date.now()
+    return data
+  }).finally(() => {
+    if (_limitsInflight === p) _limitsInflight = null
+  })
+  if (!forceRefresh) _limitsInflight = p
+  else {
+    p.then((data) => { _limitsCache = data; _limitsCacheAt = Date.now() }).catch(() => {})
+  }
+  return p
+}
+
 export const api = {
   health: () => request('/health'),
 
@@ -53,7 +78,7 @@ export const api = {
 
   getUsageModels: (days: number = 7) => request(`/admin/usage/models?days=${days}`),
 
-  getUsageLimits: () => request('/admin/usage/limits'),
+  getUsageLimits: (forceRefresh: boolean = false) => getCachedUsageLimits(forceRefresh),
 
   getPayments: () => request('/admin/payments'),
 

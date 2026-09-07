@@ -64,7 +64,7 @@ const DailyLimitBanner: FC = () => {
       }).catch(() => {});
     };
     fetchLimits();
-    const iv = window.setInterval(fetchLimits, 60000);
+    const iv = window.setInterval(fetchLimits, 5 * 60 * 1000);
     return () => window.clearInterval(iv);
   }, []);
   const exceeded = dailyLimit != null && dailyUsed != null && dailyUsed >= dailyLimit;

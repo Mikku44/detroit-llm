@@ -17,6 +17,7 @@ from backend.auth.key_encryption import decrypt_api_key
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 _status_cache: TTLCache = TTLCache(maxsize=32, ttl=15)
+_limits_cache: TTLCache = TTLCache(maxsize=2048, ttl=60)
 
 
 async def _require_owner(user_id: str, db: AsyncSession) -> User:
@@ -182,6 +183,9 @@ async def get_usage_limits(
     db: AsyncSession = Depends(get_db),
 ):
     """Tier limits + current usage + tier pricing table, for the usage page."""
+    cached = _limits_cache.get(user_id)
+    if cached is not None:
+        return cached
     stmt = select(User).where(User.id == user_id)
     result = await db.execute(stmt)
     user = result.scalar_one_or_none()
@@ -243,7 +247,7 @@ async def get_usage_limits(
         image_quota = tier_map["free"].get("image_quota", 0)
 
     is_free = plan == "free"
-    return {
+    resp = {
         "plan": plan,
         "is_free": is_free,
         "current_tier_id": current_tier_id,
@@ -257,6 +261,8 @@ async def get_usage_limits(
         "images_used": images_used,
         "tiers": TIER_OPTIONS,
     }
+    _limits_cache[user_id] = resp
+    return resp
 
 
 @router.get("/usage")

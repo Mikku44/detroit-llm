@@ -1350,6 +1350,69 @@ _IMAGE_INTENT_KEYWORDS = (
 )
 _IMAGE_INTENT_RE = re.compile(_IMAGE_INTENT_KEYWORDS, re.IGNORECASE)
 
+CLARIFY_SYSTEM_SUFFIX = (
+    "You decide whether the user's request needs clarification before acting. "
+    "If the request is clear, proceed directly without asking. "
+    "If it is ambiguous, too short, or missing key details for a costly action "
+    "(web search, image generation, or any tool call), ask 1-3 short clarifying "
+    "questions in the user's own language as a normal reply and wait for their "
+    "answer. Never use a heuristic length rule — use your own judgement of "
+    "whether you can act correctly without asking."
+)
+
+def _ensure_clarify_system(messages: list) -> list:
+    msgs = list(messages or [])
+    if not msgs:
+        return [{"role": "system", "content": CLARIFY_SYSTEM_SUFFIX}]
+    first = msgs[0] if isinstance(msgs[0], dict) else None
+    if first and first.get("role") == "system" and isinstance(first.get("content"), str):
+        if CLARIFY_SYSTEM_SUFFIX[:40] not in first["content"]:
+            msgs[0] = {**first, "content": first["content"] + "\n\n" + CLARIFY_SYSTEM_SUFFIX}
+        return msgs
+    return [{"role": "system", "content": CLARIFY_SYSTEM_SUFFIX}] + msgs
+
+
+def _tool_confirm_payload(model: str, created_time: int, tool: str, question: str) -> dict:
+    return {
+        "id": f"chatcmpl-confirm-{created_time}",
+        "object": "chat.completion",
+        "created": created_time,
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": question,
+                },
+                "finish_reason": "confirm_required",
+            }
+        ],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "confirm_required": True,
+        "pending_tool": tool,
+    }
+
+
+def _stream_confirm_question(model: str, created_time: int, question: str):
+    chunk = {
+        "id": f"chatcmpl-confirm-{created_time}",
+        "object": "chat.completion.chunk",
+        "created": created_time,
+        "model": model,
+        "choices": [{"index": 0, "delta": {"role": "assistant", "content": question}, "finish_reason": None}],
+    }
+    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+    done = {
+        "id": f"chatcmpl-confirm-{created_time}",
+        "object": "chat.completion.chunk",
+        "created": created_time,
+        "model": model,
+        "choices": [{"index": 0, "delta": {}, "finish_reason": "confirm_required"}],
+    }
+    yield f"data: {json.dumps(done)}\n\n"
+    yield "data: [DONE]\n\n"
+
 
 def _text_only_messages(messages: list) -> list:
     """Strip image parts from messages so only text remains.
@@ -2500,8 +2563,21 @@ async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: d
     # Custom gateway flags — pop them so they never reach an upstream provider.
     image_gen = bool(body.get("image_gen"))
     web_search = bool(body.get("web_search"))
+    require_confirm = bool(body.get("require_confirm") or body.get("confirm_first"))
+    confirmed = bool(body.get("confirmed") or body.get("confirm"))
     body.pop("image_gen", None)
     body.pop("web_search", None)
+    body.pop("require_confirm", None)
+    body.pop("confirm_first", None)
+    body.pop("confirmed", None)
+    body.pop("confirm", None)
+
+    # Ask-first: inject clarifying system prompt so the model asks the user
+    # before acting when the request is vague.
+    try:
+        body["messages"] = _ensure_clarify_system(body.get("messages") or [])
+    except Exception:
+        pass
 
     # Media routing: qwen3.7-flash, qwen3.8-flash & glm-5.3-flash support [text,image,video],
     # deepseek-v4-flash-vision-exp supports [text,image] only.
@@ -2540,13 +2616,47 @@ async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: d
     # let DeepSeek tool-call our image tool.
     if model and model.lower() in _IMAGE_ONLY_MODELS:
         image_gen = True
-    if image_gen or await _detect_image_intent(body.get("messages") or []):
+    # require_confirm blocks only an *explicit* image request (toggle / image-only
+    # model). Auto-detected intent is left for the model to decide: with the
+    # clarify system prompt it can ask the user itself when the request is vague.
+    if image_gen and require_confirm and not confirmed:
+        q = (
+            "ก่อนสร้างรูป ขอยืนยันหน่อยครับ:\n"
+            f"• prompt: {_last_user_text(body.get('messages') or [])[:200]!r}\n"
+            "ตอบ 'ยืนยัน' เพื่อให้สร้างรูป หรือบอกเพิ่มว่าอยากได้สไตล์/ขนาด/รายละเอียดอะไรเพิ่มครับ?"
+        )
+        if is_stream:
+            return StreamingResponse(
+                _stream_confirm_question(model, created_time, q),
+                media_type="text/event-stream",
+            )
+        return JSONResponse(
+            content=_tool_confirm_payload(model, created_time, "image_gen", q),
+            status_code=200,
+        )
+    wants_image = image_gen or await _detect_image_intent(body.get("messages") or [])
+    if wants_image:
         print(f"  [image-intent] -> tool loop (prompt: {_last_user_text(body.get('messages') or [])[:100]!r})")
         resp = await _proxy_image_tool_loop(db, user_id, model, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, model, body.get("messages", []))
 
     # If web search is toggled on, run the search tool loop.
     if web_search:
+        if require_confirm and not confirmed:
+            q = (
+                "ก่อนค้นเว็บ ขอยืนยันหน่อยครับ:\n"
+                f"• query: {_last_user_text(body.get('messages') or [])[:200]!r}\n"
+                "ตอบ 'ยืนยัน' เพื่อให้ค้นเว็บ หรือบอกเพิ่มว่าต้องการแหล่ง/ช่วงเวลา/ภาษาไหนครับ?"
+            )
+            if is_stream:
+                return StreamingResponse(
+                    _stream_confirm_question(model, created_time, q),
+                    media_type="text/event-stream",
+                )
+            return JSONResponse(
+                content=_tool_confirm_payload(model, created_time, "web_search", q),
+                status_code=200,
+            )
         print(f"  [web-search] -> tool loop (query: {_last_user_text(body.get('messages') or [])[:100]!r})")
         resp = await _proxy_web_search_loop(db, user_id, model, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, model, body.get("messages", []))

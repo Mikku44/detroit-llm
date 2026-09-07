@@ -497,6 +497,9 @@ export default function Chat3() {
   const [dailyUsed, setDailyUsed] = useState<number | null>(null)
   const [dailyLimit, setDailyLimit] = useState<number | null>(null)
   const [maxTokens, setMaxTokens] = useState(4096)
+  const [askFirst, setAskFirst] = useState(true)
+  const [confirm, setConfirm] = useState<{ kind: 'image' | 'search'; title: string; detail: string } | null>(null)
+  const [pendingText, setPendingText] = useState<string | undefined>(undefined)
   const { activeId, setActiveId, save: saveConversation, getMessagesPage, appendMessages } = useChatHistory()
   const operationRef = useRef(0)
   const sendingRef = useRef(false)
@@ -642,15 +645,17 @@ export default function Chat3() {
   }, [])
 
   useEffect(() => {
-    const fetchLimits = () => {
-      api.getUsageLimits().then((l: any) => {
+    let cancelled = false
+    const fetchLimits = (force = false) => {
+      api.getUsageLimits(force).then((l: any) => {
+        if (cancelled) return
         setDailyUsed(typeof l.daily_used === 'number' ? l.daily_used : null)
         setDailyLimit(typeof l.daily_limit === 'number' ? l.daily_limit : null)
       }).catch(() => {})
     }
     fetchLimits()
-    const iv = window.setInterval(fetchLimits, 60000)
-    return () => window.clearInterval(iv)
+    const iv = window.setInterval(() => fetchLimits(), 5 * 60 * 1000)
+    return () => { cancelled = true; window.clearInterval(iv) }
   }, [])
 
   useEffect(() => {
@@ -660,7 +665,8 @@ export default function Chat3() {
         setDailyLimit(typeof l.daily_limit === 'number' ? l.daily_limit : null)
       }).catch(() => {})
     }
-  }, [busy])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy === false ? 'idle' : 'busy'])
 
   const isDailyExceeded = dailyLimit != null && dailyUsed != null && dailyUsed >= dailyLimit
 
@@ -783,7 +789,7 @@ export default function Chat3() {
     el.style.height = `${Math.min(el.scrollHeight, maxH)}px`
   }
 
-  const send = async (textOverride?: string) => {
+  const send = async (textOverride?: string, opts?: { skipConfirm?: boolean }) => {
     if (sendingRef.current || pagingRef.current || compacting || attaching || !historyLoaded || activeId !== (id ?? null)) return
     if (isDailyExceeded) { setUpgradeOpen(true); return }
     const text = (textOverride ?? input).trim()
@@ -792,6 +798,23 @@ export default function Chat3() {
     if (!sessionToken || !model) {
       setAttachError(!sessionToken ? 'Log in to start chatting.' : 'No model is available right now.')
       return
+    }
+    const requestModel = freeTier && !model.includes('flash') ? 'deepseek-v4-flash' : model
+    const doImageGen = imageGen || ['z-image-turbo', 'glm-image', 'grok-imagine-image'].includes(requestModel)
+    // ถามก่อนใช้ tool ที่เปิดเองแบบ explicit เท่านั้น
+    // ส่วนว่าข้อความคลุมเครือไหม / ต้องถามเพิ่มไหม -> ให้ model ตัดสินใจเอง
+    // (backend ฉีด clarify system prompt; model จะถามกลับมาเป็นข้อความปกติ)
+    if (askFirst && !opts?.skipConfirm) {
+      if (doImageGen) {
+        setPendingText(textOverride)
+        setConfirm({ kind: 'image', title: 'สร้างรูปใช่ไหม?', detail: `“${text.slice(0, 140)}” จะใช้ image tool (มีค่าใช้จ่าย/ใช้เวลา) ยืนยันก่อนทำไหม?` })
+        return
+      }
+      if (webSearch) {
+        setPendingText(textOverride)
+        setConfirm({ kind: 'search', title: 'ค้นเว็บใช่ไหม?', detail: `“${text.slice(0, 140)}” จะค้นเว็บก่อนตอบ ยืนยันก่อนทำไหม?` })
+        return
+      }
     }
     sendingRef.current = true
     setBusy(true)
@@ -803,8 +826,6 @@ export default function Chat3() {
     abortRef.current = controller
     const deadline = streamDeadline(controller)
     const startedAt = performance.now()
-    const requestModel = freeTier && !model.includes('flash') ? 'deepseek-v4-flash' : model
-    const doImageGen = imageGen || ['z-image-turbo', 'glm-image', 'grok-imagine-image'].includes(requestModel)
     const userMsg: Msg = { role: 'user', content: text, attachments, model: requestModel }
     let assistant: Msg = { role: 'assistant', content: '', reasoning: '', model: requestModel }
     let displayed = false
@@ -841,6 +862,8 @@ export default function Chat3() {
         ...(thinking ? { output_config: { effort } } : {}),
         ...(doImageGen ? { image_gen: true } : {}),
         ...(webSearch ? { web_search: true } : {}),
+        ...(askFirst ? { require_confirm: true } : {}),
+        ...(opts?.skipConfirm ? { confirmed: true } : {}),
       }
       const res = await fetch('/api/web/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
@@ -1520,6 +1543,22 @@ export default function Chat3() {
                 </TooltipTrigger>
                 <TooltipContent side="top">{webSearch ? 'Web search enabled — model can browse' : 'Enable web search for up-to-date answers'}</TooltipContent>
               </Tooltip>
+              <Tooltip>
+                <TooltipTrigger asChild>
+              <button
+                onClick={() => setAskFirst((v) => !v)}
+                className={`flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors whitespace-nowrap ${
+                  askFirst
+                    ? 'border-(--primary-color)/50 bg-(--primary-color)/10 text-(--primary-color)'
+                    : 'border-zinc-700 bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
+                }`}
+                  >
+                    <FiClock size={12} />
+                    {askFirst ? 'ถามก่อนทำ On' : 'ถามก่อนทำ Off'}
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="top">{askFirst ? 'ถามยืนยันก่อนใช้ tool / ถามกลับเมื่อคลุมเครือ' : 'ส่งทันทีโดยไม่ถามยืนยัน'}</TooltipContent>
+              </Tooltip>
               <div className="flex items-center gap-0.5 rounded-full border border-zinc-700 bg-zinc-800 p-0.5 shrink-0">
                 {([1024, 2048, 4096, 8192] as const).map((v) => (
                   <Tooltip key={v}>
@@ -1605,6 +1644,34 @@ export default function Chat3() {
     </div>
 
     <UpgradeDialog open={upgradeOpen} onOpenChange={setUpgradeOpen} />
+      {confirm && (
+        <div className="fixed inset-0 z-[80] flex items-end sm:items-center justify-center bg-black/60 p-4" onClick={() => { setConfirm(null); setPendingText(undefined) }}>
+          <div className="w-full max-w-md rounded-2xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-semibold text-zinc-100">{confirm.title}</h3>
+            <p className="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-zinc-400">{confirm.detail}</p>
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                onClick={() => { const t = pendingText; setConfirm(null); setPendingText(undefined); void send(t, { skipConfirm: true }) }}
+                className="h-10 rounded-full bg-(--primary-color) text-sm font-semibold text-(--primary-foreground) hover:opacity-90"
+              >
+                ยืนยัน ทำเลย
+              </button>
+              <button
+                onClick={() => { setConfirm(null); setPendingText(undefined); textareaRef.current?.focus() }}
+                className="h-10 rounded-full border border-zinc-700 bg-zinc-800 text-sm text-zinc-200 hover:bg-zinc-700"
+              >
+                แก้ไขก่อน
+              </button>
+              <button
+                onClick={() => { setConfirm(null); setPendingText(undefined) }}
+                className="h-10 rounded-full text-sm text-zinc-500 hover:text-zinc-300"
+              >
+                ยกเลิก
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
