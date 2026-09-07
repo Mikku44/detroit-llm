@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
 import { Markdown } from '../components/Markdown'
@@ -230,44 +230,72 @@ function estimateMessagesTokens(msgs: Msg[]): number {
   return total
 }
 
-function parseSse(buffer: string, onContent: (text: string) => void, onReasoning: (text: string) => void, onMeta: (meta: SseMeta) => void): string {
-  const lines = buffer.split('\n')
-  let last = lines.pop() ?? ''
-  for (const line of lines) {
-    if (!line.startsWith('data:')) continue
-    const data = line.slice(5).trim()
-    if (data === '[DONE]') continue
-    try {
-      const json = JSON.parse(data)
-      if (json?.error && typeof json.error.message === 'string' && json.error.message) {
-        const code = json.error.code ? `[${json.error.code}] ` : ''
-        onContent(`${code}${json.error.message}`)
-        continue
-      }
-      if (json?.error && typeof json.error === 'string') {
-        onContent(json.error)
-        continue
-      }
-      const delta = json?.choices?.[0]?.delta || {}
-      if (typeof delta.content === 'string' && delta.content) onContent(delta.content)
-      if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) onReasoning(delta.reasoning_content)
-      const meta: SseMeta = {}
-      if (typeof json?.model === 'string' && json.model) meta.model = json.model
-      const finish = json?.choices?.[0]?.finish_reason
-      if (finish != null) meta.finish_reason = finish
-      if (json?.usage && typeof json.usage.prompt_tokens === 'number') {
-        meta.usage = {
-          prompt_tokens: json.usage.prompt_tokens,
-          completion_tokens: typeof json.usage.completion_tokens === 'number' ? json.usage.completion_tokens : 0,
-          total_tokens: typeof json.usage.total_tokens === 'number' ? json.usage.total_tokens : 0,
-        }
-      }
-      if (meta.model || meta.usage || meta.finish_reason != null) onMeta(meta)
-    } catch {
-      last = `${line}\n${last}`
+// Consume complete SSE events, retaining only the unfinished event.
+function parseSse(buffer: string, onContent: (text: string) => void, onReasoning: (text: string) => void, onMeta: (meta: SseMeta) => void, onDone: () => void = () => {}): string {
+  let match: RegExpExecArray | null
+  while ((match = /\r?\n\r?\n/.exec(buffer))) {
+    const event = buffer.slice(0, match.index)
+    buffer = buffer.slice(match.index + match[0].length)
+    const data = event.split(/\r?\n/).filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).replace(/^ /, '')).join('\n')
+    if (!data) continue
+    if (data.trim() === '[DONE]') { onDone(); return '' }
+    let json: any
+    try { json = JSON.parse(data) } catch { throw new Error('Invalid streaming response.') }
+    if (json?.error) {
+      const err = json.error
+      throw new Error(typeof err === 'string' ? err : `${err.code ? `[${err.code}] ` : ''}${err.message || 'Stream failed.'}`)
     }
+    const choice = json?.choices?.[0]
+    const delta = choice?.delta || {}
+    if (typeof delta.content === 'string') onContent(delta.content)
+    if (typeof delta.reasoning_content === 'string') onReasoning(delta.reasoning_content)
+    const meta: SseMeta = {}
+    if (typeof json?.model === 'string') meta.model = json.model
+    if (choice?.finish_reason != null) meta.finish_reason = choice.finish_reason
+    if (typeof json?.usage?.prompt_tokens === 'number') {
+      const prompt_tokens = json.usage.prompt_tokens
+      const completion_tokens = json.usage.completion_tokens ?? 0
+      meta.usage = { prompt_tokens, completion_tokens, total_tokens: json.usage.total_tokens ?? prompt_tokens + completion_tokens }
+    }
+    onMeta(meta)
   }
-  return last
+  return buffer
+}
+
+// Timers also run while fetch()/reader.read() is awaiting data.
+function streamDeadline(controller: AbortController) {
+  let expired = false
+  let idle: ReturnType<typeof setTimeout>
+  const expire = () => { expired = true; controller.abort() }
+  const hard = setTimeout(expire, STREAM_MAX_MS)
+  const touch = () => { clearTimeout(idle); idle = setTimeout(expire, STREAM_IDLE_MS) }
+  touch()
+  return { touch, expired: () => expired, dispose: () => { clearTimeout(hard); clearTimeout(idle) } }
+}
+
+async function consumeStream(response: Response, controller: AbortController, touch: () => void,
+  onContent: (text: string) => void, onReasoning: (text: string) => void, onMeta: (meta: SseMeta) => void) {
+  if (!response.body) throw new Error('Response has no stream.')
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let finished = false
+  try {
+    while (!finished) {
+      if (controller.signal.aborted) throw new DOMException('Aborted', 'AbortError')
+      const { done, value } = await reader.read()
+      touch()
+      buffer += done ? decoder.decode() : decoder.decode(value, { stream: true })
+      // Flush a final event even when the server omits its trailing blank line.
+      if (done && buffer.trim()) buffer += '\n\n'
+      buffer = parseSse(buffer, onContent, onReasoning, onMeta, () => { finished = true })
+      if (done) break
+    }
+  } finally {
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
+  }
 }
 
 function friendlyError(res: Response, raw: string, membersUrl: string): { content: string; cta?: Cta } {
@@ -470,9 +498,14 @@ export default function Chat3() {
   const [dailyLimit, setDailyLimit] = useState<number | null>(null)
   const [maxTokens, setMaxTokens] = useState(4096)
   const { activeId, setActiveId, save: saveConversation, getMessagesPage, appendMessages } = useChatHistory()
-  const convSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const operationRef = useRef(0)
+  const sendingRef = useRef(false)
+  const pagingRef = useRef(false)
+  const routeRef = useRef(id)
+  routeRef.current = id
+  const contextRef = useRef<Msg[] | null>(null)
+  const stickToBottomRef = useRef(true)
   const modelRef = useRef<HTMLDivElement>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
   const topSentinelRef = useRef<HTMLDivElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
@@ -486,6 +519,22 @@ export default function Chat3() {
   useEffect(() => {
     api.health().then((h) => setMembersUrl((h as { members_url?: string }).members_url || '')).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    operationRef.current += 1
+    abortRef.current?.abort()
+    sendingRef.current = false
+    pagingRef.current = false
+    contextRef.current = null
+    setBusy(false)
+    setCompacting(false)
+    setLoadingMore(false)
+    setBusyIsImage(false)
+    setPending([])
+    setInput('')
+    stickToBottomRef.current = true
+    return () => { operationRef.current += 1; abortRef.current?.abort() }
+  }, [id])
 
   // Open the conversation given by the URL (/chat/:id). /chat without id is always a new chat.
   useEffect(() => {
@@ -529,8 +578,10 @@ export default function Chat3() {
         setHistoryLoaded(true)
       })
       .catch((e) => {
+        if (cancelled) return
         if (import.meta.env.DEV) console.log('[DEV /chat/:id] conversation load failed', activeId, e)
-        setHistoryLoaded(true)
+        setHistoryLoaded(false)
+        setAttachError('Could not load conversation history. Reopen this chat to retry.')
       })
     return () => {
       cancelled = true
@@ -539,13 +590,17 @@ export default function Chat3() {
   }, [activeId])
 
   const loadMore = async () => {
-    if (!activeId || !hasMore || loadingMore || oldestPos == null) return
+    if (!activeId || !hasMore || pagingRef.current || busy || oldestPos == null) return
+    const route = id
+    const operation = operationRef.current
+    pagingRef.current = true
     setLoadingMore(true)
     const container = scrollRef.current
     const prevHeight = container?.scrollHeight ?? 0
     const prevTop = container?.scrollTop ?? 0
     try {
       const page = await getMessagesPage(activeId, { limit: 30, before: oldestPos })
+      if (routeRef.current !== route || operation !== operationRef.current) return
       if (page.messages.length) {
         setMessages((prev) => [...page.messages, ...prev])
         setOldestPos(page.oldestPosition)
@@ -559,7 +614,7 @@ export default function Chat3() {
     } catch {
       /* ignore */
     } finally {
-      setLoadingMore(false)
+      if (operation === operationRef.current) { pagingRef.current = false; setLoadingMore(false) }
     }
   }
 
@@ -576,22 +631,8 @@ export default function Chat3() {
     obs.observe(el)
     return () => obs.disconnect()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasMore, historyLoaded, oldestPos, activeId])
+  }, [hasMore, historyLoaded, oldestPos, activeId, busy])
 
-  useEffect(() => {
-    if (!historyLoaded || busy || messages.length === 0) return
-    if (activeId) return
-    if (convSaveTimer.current) clearTimeout(convSaveTimer.current)
-    convSaveTimer.current = setTimeout(async () => {
-      const convId = await saveConversation(activeId, messages, model || undefined)
-      if (convId && convId !== activeId) {
-        navigate(`/chat/${convId}`, { replace: true })
-      }
-    }, 1200)
-    return () => {
-      if (convSaveTimer.current) clearTimeout(convSaveTimer.current)
-    }
-  }, [messages, busy, historyLoaded, model, activeId, saveConversation, navigate])
 
   useEffect(() => {
     api
@@ -624,12 +665,12 @@ export default function Chat3() {
   const isDailyExceeded = dailyLimit != null && dailyUsed != null && dailyUsed >= dailyLimit
 
   useEffect(() => {
-    if (!sessionToken) return
+    if (!sessionToken) { setModelsLoading(false); return }
     setModelsLoading(true)
     fetch('/v1/models', {
       headers: { Authorization: `Bearer ${sessionToken}` },
     })
-      .then((r) => r.json())
+      .then((r) => { if (!r.ok) throw new Error('Could not load models.'); return r.json() })
       .then((d) => {
         const list = (d?.data || []).map((m: { id: string }) => m.id)
         let filtered = list.filter((id: string) => ALLOWED_CHAT_MODELS.has(id))
@@ -666,16 +707,20 @@ export default function Chat3() {
     }
   }, [])
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, busy])
+  // Scroll only the chat viewport; scrollIntoView also moves ancestor scrollers.
+  useLayoutEffect(() => {
+    const container = scrollRef.current
+    if (!container || !historyLoaded || !stickToBottomRef.current || pagingRef.current) return
+    container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight)
+  }, [messages, historyLoaded])
 
   useEffect(() => {
     resizeTextarea()
   }, [input])
 
   const addFiles = async (files: File[]) => {
-    if (!files.length) return
+    if (!files.length || attaching || sendingRef.current) return
+    const route = id
     setAttaching(true)
     setAttachError(null)
     const added: Attachment[] = []
@@ -688,6 +733,7 @@ export default function Chat3() {
         window.setTimeout(() => setAttachError(null), 5000)
       }
     }
+    if (routeRef.current !== route) { setAttaching(false); return }
     if (added.length) setPending((p) => [...p, ...added])
     setAttaching(false)
   }
@@ -738,304 +784,127 @@ export default function Chat3() {
   }
 
   const send = async (textOverride?: string) => {
-    if (isDailyExceeded) {
-      setUpgradeOpen(true)
-      return
-    }
+    if (sendingRef.current || pagingRef.current || compacting || attaching || !historyLoaded || activeId !== (id ?? null)) return
+    if (isDailyExceeded) { setUpgradeOpen(true); return }
     const text = (textOverride ?? input).trim()
     const attachments = [...pending]
-    if ((!text && attachments.length === 0) || busy) return
-    if (nearLimit && messages.length >= 3) {
-      // Auto-compact before the next message to keep the conversation within the context window.
-      setMessages((m) => [
-        ...m,
-        { role: 'user', content: 'Compacting conversation to fit the context window…', model },
-      ])
-      setBusy(true)
-      const ok = await compactChat()
-      setBusy(false)
-      if (!ok) return
-    }
-    if (!sessionToken) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: 'assistant',
-          content: 'You are not logged in. Log in to start chatting.',
-          error: true,
-          cta: { label: 'Log in', href: '/login' },
-        },
-      ])
+    if (!text && !attachments.length) return
+    if (!sessionToken || !model) {
+      setAttachError(!sessionToken ? 'Log in to start chatting.' : 'No model is available right now.')
       return
     }
-    if (!model) {
-      setMessages((m) => [
-        ...m,
-        {
-          role: 'assistant',
-          content: 'No model is available right now. Please try again later.',
-          error: true,
-        },
-      ])
-      return
-    }
-    setInput('')
-    setPending([])
-    const hasImage = attachments.some((a) => a.kind === 'image')
-    const hasVideo = attachments.some((a) => a.kind === 'video')
-    const hasMedia = hasImage || hasVideo
-    const requestModel = freeTier
-      ? model.includes('flash') || model === 'glm-5.3-flash'
-        ? model
-        : 'deepseek-v4-flash'
-      : model
-    const upstreamModel = requestModel
-    setMessages((m) => [...m, { role: 'user', content: text, attachments, model: requestModel }, { role: 'assistant', content: '', reasoning: '', model: upstreamModel }])
+    sendingRef.current = true
     setBusy(true)
-    setIsVision(hasMedia)
-
-    const IMAGE_ONLY_MODELS = new Set(['z-image-turbo', 'glm-image', 'grok-imagine-image', 'gpt-image-1', 'dall-e-3', 'gemini-2.0-flash-preview-image-generation'])
-    const isImageModel = IMAGE_ONLY_MODELS.has(requestModel)
-    const doImageGen = imageGen || isImageModel
-    setBusyIsImage(doImageGen)
-    const history = doImageGen
-      ? []
-      : messages
-          .filter((m) => m.role === 'user' || m.role === 'assistant')
-          .map((m) => ({
-            role: m.role,
-            content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
-          }))
-    const body: Record<string, unknown> = {
-      model: requestModel,
-      max_tokens: maxTokens,
-      stream: true,
-      messages: doImageGen
-        ? [{ role: 'user', content: text }]
-        : [...history, { role: 'user', content: buildContent(text, attachments) }],
-    }
-    if (!hasMedia) {
-      if (thinking) {
-        body['reasoning'] = { effort }
-        body['output_config'] = { effort }
-      } else {
-        body['reasoning'] = { effort: 'none' }
-      }
-    }
-    if (doImageGen) body['image_gen'] = true
-    if (webSearch) body['web_search'] = true
-
+    stickToBottomRef.current = true
+    const operation = ++operationRef.current
+    const route = id
+    const current = () => operationRef.current === operation && routeRef.current === route
     const controller = new AbortController()
     abortRef.current = controller
-    let _logAcc = ''
-    let _respModel = upstreamModel
-    let _finishReason: string | null | undefined = null
-    let _usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined = undefined
-
+    const deadline = streamDeadline(controller)
+    const startedAt = performance.now()
+    const requestModel = freeTier && !model.includes('flash') ? 'deepseek-v4-flash' : model
+    const doImageGen = imageGen || ['z-image-turbo', 'glm-image', 'grok-imagine-image'].includes(requestModel)
+    const userMsg: Msg = { role: 'user', content: text, attachments, model: requestModel }
+    let assistant: Msg = { role: 'assistant', content: '', reasoning: '', model: requestModel }
+    let displayed = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const publish = () => {
+      clearTimeout(timer)
+      timer = undefined
+      if (!current()) return
+      const snapshot = { ...assistant }
+      setMessages((prev) => current() ? [...prev.slice(0, -1), snapshot] : prev)
+    }
+    const schedule = () => { if (!timer) timer = setTimeout(publish, 48) }
     try {
+      let requestHistory = contextRef.current ?? messages
+      if (!doImageGen && nearLimit && requestHistory.length >= 3) {
+        const summary = await compactChat(true, controller)
+        if (!summary || !current()) return
+        requestHistory = summary
+      }
+      if (!current()) return
+      setInput('')
+      setPending([])
+      setMessages((prev) => [...prev, userMsg, { ...assistant }])
+      displayed = true
+      setIsVision(attachments.some((a) => a.kind !== 'text'))
+      setBusyIsImage(doImageGen)
+      const history = requestHistory.filter((m) => !m.error && (m.content || m.attachments?.length)).map((m) => ({
+        role: m.role, content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
+      }))
+      const body: Record<string, unknown> = {
+        model: requestModel, max_tokens: maxTokens, stream: true,
+        messages: [...(doImageGen ? [] : history), { role: 'user', content: buildContent(text, attachments) }],
+        reasoning: { effort: thinking ? effort : 'none' },
+        ...(thinking ? { output_config: { effort } } : {}),
+        ...(doImageGen ? { image_gen: true } : {}),
+        ...(webSearch ? { web_search: true } : {}),
+      }
       const res = await fetch('/api/web/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
-        body: JSON.stringify(body),
-        signal: controller.signal,
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify(body), signal: controller.signal,
       })
-      if (!res.ok || !res.body) {
-        const detail = await res.text().catch(() => `HTTP ${res.status}`)
-        const err = friendlyError(res, detail, membersUrl)
-        setMessages((m) => {
-          const copy = [...m]
-          const idx = copy.length - 1
-          if (copy[idx]?.role === 'assistant') {
-            copy[idx] = { ...copy[idx], content: err.content, error: true, cta: err.cta }
-          } else {
-            copy.push({ role: 'assistant', content: err.content, error: true, cta: err.cta })
-          }
-          return copy
-        })
-        setBusy(false)
-        return
+      deadline.touch()
+      if (!res.ok) {
+        const err = friendlyError(res, await res.text(), membersUrl)
+        assistant = { ...assistant, ...err, error: true }
+      } else {
+        await consumeStream(res, controller, deadline.touch,
+          (content) => { assistant.content += content; schedule() },
+          (reasoning) => { if (thinking) { assistant.reasoning += reasoning; schedule() } },
+          (meta) => { assistant = { ...assistant, ...meta } })
+        if (!assistant.content && !assistant.reasoning) throw new Error('The model returned an empty response.')
       }
-
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      const startedAt = performance.now()
-      let lastChunkAt = performance.now()
-      let timedOut = false
-
-      let pendingContent = ''
-      let pendingReasoning = ''
-      let flushTimer: ReturnType<typeof setTimeout> | null = null
-      const flushPending = () => {
-        if (!pendingContent && !pendingReasoning) return
-        const c = pendingContent
-        const r = pendingReasoning
-        const isErr = c.includes('⚠️') || /\[13\d{2,3}\]/.test(c) || c.toLowerCase().includes('overloaded')
-        pendingContent = ''
-        pendingReasoning = ''
-        setMessages((m) => {
-          const copy = [...m]
-          const idx = copy.length - 1
-          if (copy[idx]?.role === 'assistant') {
-            copy[idx] = {
-              ...copy[idx],
-              content: c ? (copy[idx].content ?? '') + c : copy[idx].content,
-              reasoning: r ? (copy[idx].reasoning ?? '') + r : copy[idx].reasoning,
-              ...(isErr && c ? { error: true } : {}),
-            }
-          }
-          return copy
-        })
+    } catch (err) {
+      const stopped = controller.signal.aborted && !deadline.expired()
+      const detail = deadline.expired() ? 'Response timed out. Please try again.'
+        : stopped ? 'Stopped.' : `Something went wrong. ${err instanceof Error ? err.message : String(err)}`
+      assistant = { ...assistant,
+        content: assistant.content ? `${assistant.content}\n\n${detail}` : detail,
+        error: !stopped,
       }
-      const scheduleFlush = () => {
-        if (flushTimer) return
-        flushTimer = setTimeout(() => {
-          flushTimer = null
-          flushPending()
-        }, 48)
-      }
-      const appendToLast = (key: 'content' | 'reasoning', text: string) => {
-        if (key === 'content') pendingContent += text
-        else pendingReasoning += text
-        scheduleFlush()
-      }
-
-      const patchLastMeta = () => {
-        const durationMs = Math.round(performance.now() - startedAt)
-        setMessages((m) => {
-          const copy = [...m]
-          const idx = copy.length - 1
-          if (copy[idx]?.role === 'assistant') {
-            const displayModel = _respModel && _respModel !== 'gemini-2.5-flash' ? _respModel : copy[idx].model
-            copy[idx] = {
-              ...copy[idx],
-              durationMs,
-              model: displayModel || copy[idx].model,
-              finish_reason: _finishReason,
-              usage: _usage || copy[idx].usage,
-            }
-          }
-          return copy
-        })
-      }
-
-      while (true) {
-        const now = performance.now()
-        if (now - startedAt > STREAM_MAX_MS) {
-          timedOut = true
-          abortRef.current?.abort()
-          break
-        }
-        if (now - lastChunkAt > STREAM_IDLE_MS) {
-          timedOut = true
-          abortRef.current?.abort()
-          break
-        }
-        const { done, value } = await reader.read()
-        if (done) break
-        lastChunkAt = performance.now()
-        const decoded = decoder.decode(value, { stream: true })
-        buffer += decoded
-        if (import.meta.env.DEV && decoded.length < 2000) {
-          console.log('[Chat3 SSE chunk]', decoded)
-        }
-        buffer = parseSse(
-          buffer,
-          (c) => {
-            if (_logAcc.length < 2000) _logAcc += c
-            appendToLast('content', c)
-          },
-          (r) => {
-            if (thinking) appendToLast('reasoning', r)
-          },
-          (meta) => {
-            if (meta.model) _respModel = meta.model
-            if (meta.finish_reason != null) _finishReason = meta.finish_reason
-            if (meta.usage) _usage = meta.usage
-          },
-        )
-      }
-      if (import.meta.env.DEV) console.log('[Chat3 response]', _logAcc)
-      patchLastMeta()
-      if (_logAcc && (_logAcc.includes('⚠️') || /\[13\d{2,3}\]/.test(_logAcc))) {
-        setMessages((m) => {
-          const copy = [...m]
-          const idx = copy.length - 1
-          if (copy[idx]?.role === 'assistant') copy[idx] = { ...copy[idx], error: true }
-          return copy
-        })
-      }
-      if (_logAcc) {
-        const isErr = _logAcc.includes('⚠️') || /\[13\d{2,3}\]/.test(_logAcc)
-        const displayRespModel = _respModel && _respModel !== 'gemini-2.5-flash' ? _respModel : requestModel
-        const userMsg: Msg = { role: 'user', content: text, attachments, model: requestModel }
-        const asstMsg: Msg = { role: 'assistant', content: _logAcc, model: displayRespModel, usage: _usage, finish_reason: _finishReason, ...(isErr ? { error: true } : {}) }
-        if (activeId) (appendMessages(activeId, [userMsg, asstMsg]) as Promise<any>).then((inserted: any) => {
-          const arr = inserted as any[] | undefined
-          if (arr?.length === 2) {
-            setMessages((prev) => {
-              const copy = [...prev]
-              const start = copy.length - 2
-              if (start >= 0 && arr[0]?.id) copy[start] = { ...copy[start], id: arr[0].id }
-              if (copy.length - 1 >= 0 && arr[1]?.id) copy[copy.length - 1] = { ...copy[copy.length - 1], id: arr[1].id }
-              return copy
-            })
-          }
-        }).catch(() => {})
-        else {
-          const toSave = [...messages, userMsg, asstMsg]
-          saveConversation(null, toSave, model || undefined).then((newId) => {
-            if (newId) navigate(`/chat/${newId}`, { replace: true })
-          }).catch(() => {})
-        }
-      }
-      if (timedOut) {
-        setMessages((m) => {
-          const copy = [...m]
-          const idx = copy.length - 1
-          if (copy[idx]?.role === 'assistant') {
-            copy[idx] = {
-              ...copy[idx],
-              content: 'Response took too long and was stopped. Please try again or shorten your question.',
-              error: true,
-            }
-          }
-          return copy
-        })
-      }
-    } catch (e) {
-      const aborted = e instanceof DOMException && e.name === 'AbortError'
-      setMessages((m) => {
-        const copy = [...m]
-        const idx = copy.length - 1
-        const patchLast = (content: string, error = false) => {
-          if (copy[idx]?.role === 'assistant') {
-            copy[idx] = { ...copy[idx], content, error }
-          } else {
-            copy.push({ role: 'assistant', content, error })
-          }
-        }
-        if (aborted) {
-          if (!copy[idx]?.content) patchLast('Stopped.')
-        } else {
-          patchLast(`Something went wrong. Please try again. (${e instanceof Error ? e.message : String(e)})`, true)
-        }
-        return copy
-      })
     } finally {
-      setBusy(false)
-      setIsVision(false)
-      setBusyIsImage(false)
-      abortRef.current = null
+      deadline.dispose()
+      clearTimeout(timer)
+      assistant.durationMs = Math.round(performance.now() - startedAt)
+      if (displayed && current()) {
+        publish()
+        if (contextRef.current) contextRef.current = [...contextRef.current, userMsg, assistant]
+        try {
+          if (activeId) {
+            const inserted = await appendMessages(activeId, [userMsg, assistant])
+            if (current() && Array.isArray(inserted) && inserted.length === 2) {
+              setMessages((prev) => current() ? [...prev.slice(0, -2),
+                { ...userMsg, id: inserted[0]?.id }, { ...assistant, id: inserted[1]?.id }] : prev)
+            }
+          } else {
+            const newId = await saveConversation(null, [...messages, userMsg, assistant], requestModel)
+            if (current() && newId) navigate(`/chat/${newId}`, { replace: true })
+          }
+        } catch {
+          if (current()) setAttachError('Could not save this response. Copy it before leaving this chat.')
+        }
+      }
+      if (current()) {
+        sendingRef.current = false
+        setBusy(false)
+        setIsVision(false)
+        setBusyIsImage(false)
+        abortRef.current = null
+      }
     }
   }
 
   const stop = () => abortRef.current?.abort()
 
-  const copyMsg = (content: string) => {
-    navigator.clipboard.writeText(content)
-    setCopied(content)
-    setTimeout(() => setCopied(null), 1500)
+  const copyMsg = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopied(content)
+      setTimeout(() => setCopied(null), 1500)
+    } catch { setAttachError('Could not copy. Please select and copy the text manually.') }
   }
 
   const reactMsg = async (idx: number, reaction: 'like' | 'dislike') => {
@@ -1067,7 +936,14 @@ export default function Chat3() {
   }
 
   const clearChat = () => {
+    operationRef.current += 1
     stop()
+    sendingRef.current = false
+    contextRef.current = null
+    setBusy(false)
+    setCompacting(false)
+    setInput('')
+    setPending([])
     setBusyIsImage(false)
     setMessages([])
     setActiveId(null)
@@ -1076,165 +952,53 @@ export default function Chat3() {
   }
 
   const contextLimit = MODEL_CONTEXT_LIMITS[model] ?? DEFAULT_CONTEXT_LIMIT
-  const usedTokens = estimateMessagesTokens(messages)
+  const usedTokens = estimateMessagesTokens(contextRef.current ?? messages)
   const usageRatio = contextLimit > 0 ? usedTokens / contextLimit : 0
   const nearLimit = usageRatio >= COMPACT_THRESHOLD
 
-  const compactChat = async (): Promise<boolean> => {
-    if (compacting || busy) return false
-    if (messages.length < 3) return false
+  // Keep compaction as request context; never replace a partially loaded archive.
+  const compactChat = async (fromSend = false, parentController?: AbortController): Promise<Msg[] | null> => {
+    if ((!fromSend && sendingRef.current) || pagingRef.current || compacting || !sessionToken || messages.length < 3) return null
+    const operation = operationRef.current
+    const route = id
+    const current = () => operation === operationRef.current && routeRef.current === route
+    const controller = parentController ?? new AbortController()
+    if (!parentController) { abortRef.current = controller; sendingRef.current = true }
+    const deadline = streamDeadline(controller)
     setCompacting(true)
     try {
-      const history = messages
-        .filter((m) => m.role === 'user' || m.role === 'assistant')
-        .map((m) => ({
-          role: m.role,
-          content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
-        }))
+      const history = (contextRef.current ?? messages).filter((m) => !m.error).map((m) => ({
+        role: m.role, content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
+      }))
       const res = await fetch('/api/web/chat/compact', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
-        body: JSON.stringify({ model, messages: history }),
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
+        body: JSON.stringify({ model, messages: history }), signal: controller.signal,
       })
-      if (!res.ok) return false
+      if (!res.ok) throw new Error('Could not compact this conversation.')
       const data = await res.json()
-      const summary = (data?.summary ?? '').trim()
-      if (!summary) return false
-      setMessages([
-        { role: 'user', content: `[Summary of earlier conversation]\n\n${summary}`, model },
-      ])
-      return true
+      const summary = typeof data?.summary === 'string' ? data.summary.trim() : ''
+      if (!summary) throw new Error('The summary was empty.')
+      if (!current()) return null
+      const result: Msg[] = [{ role: 'user', content: `[Summary of earlier conversation]\n\n${summary}`, model }]
+      contextRef.current = result
+      return result
     } catch {
-      return false
+      if (current()) setAttachError('Could not compact this conversation. Please try again.')
+      return null
     } finally {
-      setCompacting(false)
+      deadline.dispose()
+      if (current()) {
+        setCompacting(false)
+        if (!parentController) { sendingRef.current = false; abortRef.current = null }
+      }
     }
   }
 
-  const handleContinue = async () => {
-    if (busy || !sessionToken || !model || messages.length === 0) return
-    const lastIdx = messages.length - 1
-    const last = messages[lastIdx]
-    if (last.role !== 'assistant' || !isTruncated(last)) return
-    const baseContent = last.content
-    const baseReasoning = last.reasoning ?? ''
-    const history = messages
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .map((m) => ({
-        role: m.role,
-        content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
-      }))
-    const body: Record<string, unknown> = {
-      model: freeTier && !(model.includes('flash') || model === 'glm-5.3-flash') ? 'deepseek-v4-flash' : model,
-      max_tokens: maxTokens,
-      stream: true,
-      messages: [...history, { role: 'user', content: 'continue' }],
-    }
-    if (thinking) {
-      ;(body as any)['reasoning'] = { effort }
-      ;(body as any)['output_config'] = { effort }
-    } else {
-      ;(body as any)['reasoning'] = { effort: 'none' }
-    }
-    if (webSearch) (body as any)['web_search'] = true
-    const controller = new AbortController()
-    abortRef.current = controller
-    setBusy(true)
-    let acc = ''
-    let accReasoning = ''
-    let _respModel = model
-    let _finish: string | null | undefined = null
-    let _usage: any = undefined
-    try {
-      const res = await fetch('/api/web/chat/completions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      })
-      if (!res.ok || !res.body) {
-        const detail = await res.text().catch(() => `HTTP ${res.status}`)
-        const err = friendlyError(res, detail, membersUrl)
-        setMessages((m) => {
-          const copy = [...m]
-          copy[lastIdx] = { ...copy[lastIdx], content: baseContent + '\n\n' + err.content, error: true }
-          return copy
-        })
-        return
-      }
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      const startedAt = performance.now()
-      let lastChunkAt = performance.now()
-      while (true) {
-        const now = performance.now()
-        if (now - startedAt > STREAM_MAX_MS || now - lastChunkAt > STREAM_IDLE_MS) {
-          controller.abort()
-          break
-        }
-        const { done, value } = await reader.read()
-        if (done) break
-        lastChunkAt = performance.now()
-        buffer += decoder.decode(value, { stream: true })
-        buffer = parseSse(
-          buffer,
-          (c) => {
-            acc += c
-            setMessages((m) => {
-              const copy = [...m]
-              copy[lastIdx] = { ...copy[lastIdx], content: baseContent + acc, error: acc.includes('⚠️') || /\[13\d{2,3}\]/.test(acc) || undefined }
-              return copy
-            })
-          },
-          (r) => {
-            if (thinking) {
-              accReasoning += r
-              setMessages((m) => {
-                const copy = [...m]
-                copy[lastIdx] = { ...copy[lastIdx], reasoning: baseReasoning + accReasoning }
-                return copy
-              })
-            }
-          },
-          (meta) => {
-            if (meta.model) _respModel = meta.model
-            if (meta.finish_reason != null) _finish = meta.finish_reason
-            if (meta.usage) _usage = meta.usage
-          },
-        )
-      }
-      const durationMs = Math.round(performance.now() - startedAt)
-      setMessages((m) => {
-        const copy = [...m]
-        copy[lastIdx] = { ...copy[lastIdx], content: baseContent + acc, reasoning: baseReasoning + accReasoning || copy[lastIdx].reasoning, model: _respModel || copy[lastIdx].model, finish_reason: _finish, usage: _usage || copy[lastIdx].usage, durationMs }
-        return copy
-      })
-      if (acc) {
-        const merged: Msg = { ...last, content: baseContent + acc, reasoning: baseReasoning + accReasoning || last.reasoning, model: _respModel || last.model, finish_reason: _finish, usage: _usage || last.usage, durationMs }
-        const nextMessages = [...messages.slice(0, lastIdx), merged]
-        if (activeId) {
-          api.updateConversation(activeId, { messages: nextMessages.map((x) => ({ role: x.role, content: x.content, reasoning: x.reasoning, model: x.model, usage: x.usage, finish_reason: x.finish_reason, durationMs: x.durationMs, attachments: x.attachments })) }).catch(() => {})
-        } else {
-          const toSave = nextMessages
-          saveConversation(null, toSave, model || undefined).then((newId) => {
-            if (newId) navigate(`/chat/${newId}`, { replace: true })
-          }).catch(() => {})
-        }
-      }
-    } catch (e) {
-      const aborted = e instanceof DOMException && e.name === 'AbortError'
-      if (!aborted) {
-        setMessages((m) => {
-          const copy = [...m]
-          copy[lastIdx] = { ...copy[lastIdx], content: baseContent + acc + `\n\nSomething went wrong. Please try again.` , error: true }
-          return copy
-        })
-      }
-    } finally {
-      setBusy(false)
-      abortRef.current = null
-    }
+  // A continuation is an appended turn, preserving unloaded messages and their IDs.
+  const handleContinue = () => {
+    const last = messages[messages.length - 1]
+    if (pending.length) { setAttachError('Send or remove pending attachments before continuing.'); return }
+    if (last?.role === 'assistant' && !last.error && isTruncated(last)) void send('continue')
   }
 
   const isEmpty = messages.length === 0
@@ -1352,7 +1116,7 @@ export default function Chat3() {
         <div className="w-9 sm:w-10 shrink-0" />
       </div>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto min-h-0 overscroll-contain scroll-smooth">
+      <div ref={scrollRef} onScroll={(e) => { const el = e.currentTarget; stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100 }} className="relative flex-1 overflow-y-auto min-h-0 overscroll-contain [overflow-anchor:none]">
         {!historyLoaded ? (
           <div className="h-full flex flex-col items-center justify-center gap-4 px-4">
             <IOSLoading size={40} />
@@ -1477,22 +1241,22 @@ export default function Chat3() {
                           ) : (
                             <div className="whitespace-pre-wrap">{m.content}</div>
                           )}
-                          {m.role === 'assistant' && busy && i === messages.length - 1 && !m.error && !busyIsImage && (
-                            <AILoader className="mt-2 text-zinc-500" variant="dots" showElapsed />
-                          )}
                         </>
-                      ) : busy && i === messages.length - 1 ? (
-                        busyIsImage ? (
-                          <ImageGenLoading />
-                        ) : (
-                          <AILoader
-                            className="text-zinc-400"
-                            label={isVision ? 'Looking at the image…' : thinking ? 'Reasoning…' : 'Generating…'}
-                            variant="dots"
-                            showElapsed
-                          />
-                        )
                       ) : null}
+                      {m.role === 'assistant' && busy && i === messages.length - 1 && !m.error && (
+                        <div className="mt-2 min-h-6">
+                          {busyIsImage ? (
+                            !m.content ? <ImageGenLoading /> : null
+                          ) : (
+                            <AILoader
+                              className="text-zinc-400"
+                              label={isVision ? 'Looking at the image…' : thinking ? 'Reasoning…' : 'Generating…'}
+                              variant="dots"
+                              showElapsed
+                            />
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
                   {m.role === 'user' && m.content && (
@@ -1533,7 +1297,7 @@ export default function Chat3() {
                       </button>
                     </div>
                   )}
-                  {m.role === 'assistant' && isTruncated(m) && !busy && (
+                  {m.role === 'assistant' && i === messages.length - 1 && !m.error && isTruncated(m) && !busy && !compacting && (
                     <button
                       onClick={handleContinue}
                       className="mt-2 flex items-center gap-1.5 border hover:border-zinc-100/20
@@ -1569,7 +1333,6 @@ export default function Chat3() {
                 </div>
               </div>
             ))}
-            <div ref={bottomRef} />
           </div>
         )}
       </div>
@@ -1643,7 +1406,7 @@ export default function Chat3() {
               onChange={(e) => setInput(e.target.value)}
               onPaste={onPasteFiles}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault()
                   send()
                 }
@@ -1665,7 +1428,7 @@ export default function Chat3() {
             ) : (
               <button
                 onClick={() => send()}
-                disabled={isDailyExceeded || (!input.trim() && pending.length === 0) || attaching}
+                disabled={!historyLoaded || busy || compacting || isDailyExceeded || (!input.trim() && pending.length === 0) || attaching}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-(--primary-color) text-(--primary-foreground) transition-opacity hover:opacity-90 disabled:opacity-30 disabled:hover:opacity-30"
                 title={isDailyExceeded ? "Daily limit reached" : "Send message"}
               >
@@ -1680,7 +1443,8 @@ export default function Chat3() {
           <Tooltip>
             <TooltipTrigger asChild>
               <button
-                onClick={compactChat}
+                onClick={() => { void compactChat() }}
+                disabled={busy || compacting || !historyLoaded}
                 className="group relative flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-transform hover:scale-105 mt-0.5"
               >
                 <svg width="32" height="32" viewBox="0 0 32 32" className="-rotate-90">
