@@ -67,6 +67,8 @@ export const api = {
 
   listUsers: () => request('/admin/users'),
 
+  getUserUsage: (userId: string, days: number = 30) => request(`/admin/users/${userId}/usage?days=${days}`),
+
   setUserVerified: (userId: string, isVerified: boolean) =>
     request(`/admin/users/${userId}/verify`, { method: 'POST', body: JSON.stringify({ is_verified: isVerified }) }),
 

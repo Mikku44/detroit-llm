@@ -7,6 +7,7 @@ import { FiSend, FiPlus, FiCopy, FiCheck, FiPaperclip, FiThumbsUp, FiThumbsDown,
 import { useChatHistory } from '../lib/chat-history'
 import IOSLoading from '../components/ios-loading'
 import ImageGenLoading from '../components/ImageGenLoading'
+import AILoader from '../components/smoothui/ai-loader'
 import { Skeleton } from '../components/ui/skeleton'
 import { motion, AnimatePresence } from 'motion/react'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../components/ui/tooltip'
@@ -1470,21 +1471,26 @@ export default function Chat3() {
                   ) : (
                     <div className="min-w-0 break-words text-[15px] leading-7 text-zinc-200">
                       {m.content ? (
-                        m.role === 'assistant' ? (
-                          <Markdown>{m.content}</Markdown>
-                        ) : (
-                          <div className="whitespace-pre-wrap">{m.content}</div>
-                        )
+                        <>
+                          {m.role === 'assistant' ? (
+                            <Markdown>{m.content}</Markdown>
+                          ) : (
+                            <div className="whitespace-pre-wrap">{m.content}</div>
+                          )}
+                          {m.role === 'assistant' && busy && i === messages.length - 1 && !m.error && !busyIsImage && (
+                            <AILoader className="mt-2 text-zinc-500" variant="dots" showElapsed />
+                          )}
+                        </>
                       ) : busy && i === messages.length - 1 ? (
                         busyIsImage ? (
                           <ImageGenLoading />
                         ) : (
-                          <div className="flex items-center gap-3">
-                            <IOSLoading size={24} />
-                            <span className="text-[13px] text-zinc-400">
-                              {isVision ? 'Looking at the image…' : thinking ? 'Reasoning…' : 'Generating…'}
-                            </span>
-                          </div>
+                          <AILoader
+                            className="text-zinc-400"
+                            label={isVision ? 'Looking at the image…' : thinking ? 'Reasoning…' : 'Generating…'}
+                            variant="dots"
+                            showElapsed
+                          />
                         )
                       ) : null}
                     </div>

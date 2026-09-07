@@ -474,6 +474,137 @@ async def list_users(
     }
 
 
+@router.get("/users/{target_user_id}/usage")
+async def get_user_usage(
+    target_user_id: str,
+    days: int = 30,
+    user_id: str = Depends(require_session),
+    db: AsyncSession = Depends(get_db),
+):
+    """Owner-only: per-user model & token usage detail for the admin modal.
+
+    Returns summary totals, per-model breakdown, and zero-filled daily series.
+    """
+    await _require_owner(user_id, db)
+    stmt = select(User).where(User.id == target_user_id)
+    result = await db.execute(stmt)
+    target = result.scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if days < 1:
+        days = 1
+    if days > 365:
+        days = 365
+
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None)
+    start_date = (now_naive - timedelta(days=days - 1)).date()
+    cutoff = datetime.combine(start_date, datetime.min.time())
+
+    base_filter = (ApiKey.user_id == target_user_id, UsageLog.created_at >= cutoff)
+
+    summary_stmt = (
+        select(
+            func.count(UsageLog.id).label("requests"),
+            func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
+            func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
+            func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+        )
+        .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
+        .where(*base_filter)
+    )
+    summary_row = (await db.execute(summary_stmt)).one()
+    summary = {
+        "requests": int(summary_row.requests or 0),
+        "prompt_tokens": int(summary_row.prompt_tokens or 0),
+        "completion_tokens": int(summary_row.completion_tokens or 0),
+        "total_tokens": int(summary_row.total_tokens or 0),
+    }
+
+    models_stmt = (
+        select(
+            UsageLog.model.label("model"),
+            func.count(UsageLog.id).label("requests"),
+            func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
+            func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
+            func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+        )
+        .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
+        .where(*base_filter)
+        .group_by(UsageLog.model)
+        .order_by(func.sum(UsageLog.total_tokens).desc())
+    )
+    models = [
+        {
+            "model": r.model or "unknown",
+            "requests": int(r.requests),
+            "prompt_tokens": int(r.prompt_tokens or 0),
+            "completion_tokens": int(r.completion_tokens or 0),
+            "total_tokens": int(r.total_tokens or 0),
+        }
+        for r in (await db.execute(models_stmt)).fetchall()
+    ]
+
+    if _is_postgres(settings.database_url):
+        date_expr = cast(UsageLog.created_at, Date).label("date")
+    else:
+        date_expr = func.date(UsageLog.created_at).label("date")
+    daily_stmt = (
+        select(
+            date_expr,
+            func.count(UsageLog.id).label("requests"),
+            func.coalesce(func.sum(UsageLog.prompt_tokens), 0).label("prompt_tokens"),
+            func.coalesce(func.sum(UsageLog.completion_tokens), 0).label("completion_tokens"),
+            func.coalesce(func.sum(UsageLog.total_tokens), 0).label("total_tokens"),
+        )
+        .join(ApiKey, UsageLog.api_key_id == ApiKey.id)
+        .where(*base_filter)
+        .group_by(date_expr)
+    )
+    by_date = {str(r.date): r for r in (await db.execute(daily_stmt)).fetchall()}
+    daily = []
+    for i in range(days):
+        d = start_date + timedelta(days=i)
+        r = by_date.get(str(d))
+        daily.append(
+            {
+                "date": str(d),
+                "requests": int(r.requests) if r else 0,
+                "prompt_tokens": int(r.prompt_tokens) if r else 0,
+                "completion_tokens": int(r.completion_tokens) if r else 0,
+                "total_tokens": int(r.total_tokens) if r else 0,
+            }
+        )
+
+    images_used = int(
+        (
+            await db.execute(
+                select(func.count(ImageUsage.id)).where(
+                    ImageUsage.user_id == target_user_id, ImageUsage.created_at >= cutoff
+                )
+            )
+        ).scalar_one()
+        or 0
+    )
+    summary["images"] = images_used
+
+    return {
+        "user": {
+            "id": target.id,
+            "email": target.google_email,
+            "display_name": target.display_name,
+            "is_owner": target.is_owner,
+            "is_member": target.is_member,
+            "is_verified": target.is_verified,
+            "is_paid": target.is_paid,
+            "tier_id": target.tier_id,
+        },
+        "days": days,
+        "summary": summary,
+        "models": models,
+        "daily": daily,
+    }
+
+
 @router.post("/users/{target_user_id}/verify")
 async def set_user_verified(
     target_user_id: str,

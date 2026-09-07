@@ -7,6 +7,7 @@ import { Navigate } from 'react-router-dom'
 import { Skeleton } from '../components/ui/skeleton'
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../components/ui/table'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog'
 
 type StatusData = {
   status: string
@@ -68,6 +69,14 @@ function remainText(k: string, v: any): string {
   return v.status === 'unsupported' ? v.error || 'unsupported' : JSON.stringify(b).slice(0, 80)
 }
 
+type UserUsage = {
+  user: { id: string; email: string; display_name: string | null; tier_id?: string | null }
+  days: number
+  summary: { requests: number; prompt_tokens: number; completion_tokens: number; total_tokens: number; images: number }
+  models: { model: string; requests: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }[]
+  daily: { date: string; requests: number; prompt_tokens: number; completion_tokens: number; total_tokens: number }[]
+}
+
 export default function AdminSystem() {
   const { user } = useAuth()
   const [status, setStatus] = useState<StatusData | null>(null)
@@ -78,6 +87,36 @@ export default function AdminSystem() {
   const [err, setErr] = useState<string | null>(null)
   const [balTab, setBalTab] = useState<'remain' | 'json'>('remain')
   const [modelRank, setModelRank] = useState<{ models: any[]; total_requests: number; total_tokens: number } | null>(null)
+  const [selectedUser, setSelectedUser] = useState<any | null>(null)
+  const [userUsage, setUserUsage] = useState<UserUsage | null>(null)
+  const [usageLoading, setUsageLoading] = useState(false)
+  const [usageErr, setUsageErr] = useState<string | null>(null)
+  const [usageDays, setUsageDays] = useState(30)
+
+  const loadUserUsage = async (targetId: string, days: number) => {
+    setUsageLoading(true)
+    setUsageErr(null)
+    try {
+      const data = await api.getUserUsage(targetId, days)
+      setUserUsage(data)
+    } catch (e: any) {
+      setUserUsage(null)
+      setUsageErr(e.message || 'โหลดข้อมูลไม่สำเร็จ')
+    } finally {
+      setUsageLoading(false)
+    }
+  }
+
+  const openUserUsage = (u: any) => {
+    setSelectedUser(u)
+    setUserUsage(null)
+    loadUserUsage(u.id, usageDays)
+  }
+
+  useEffect(() => {
+    if (selectedUser) loadUserUsage(selectedUser.id, usageDays)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usageDays])
 
   const load = async (isManual = false) => {
     if (status) setRefreshing(true)
@@ -249,6 +288,7 @@ export default function AdminSystem() {
               <TableHead>Role</TableHead>
               <TableHead>Verified</TableHead>
               <TableHead>Joined</TableHead>
+              <TableHead className="text-right">Usage</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -259,11 +299,134 @@ export default function AdminSystem() {
                 <TableCell>{roleBadge(u)}</TableCell>
                 <TableCell>{u.is_verified ? '✓' : '—'}</TableCell>
                 <TableCell className="text-xs text-zinc-500">{u.created_at ? new Date(u.created_at).toLocaleDateString() : '-'}</TableCell>
+                <TableCell className="text-right">
+                  <button
+                    onClick={() => openUserUsage(u)}
+                    className="rounded-lg border border-zinc-700 bg-zinc-950 px-2.5 py-1 text-xs text-zinc-200 hover:bg-zinc-800 hover:border-zinc-600"
+                  >
+                    ดู usage
+                  </button>
+                </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </div>
+
+      <Dialog open={!!selectedUser} onOpenChange={(open) => { if (!open) { setSelectedUser(null); setUserUsage(null); setUsageErr(null) } }}>
+        <DialogContent className="sm:max-w-3xl max-h-[85vh] overflow-y-auto bg-zinc-900 border-zinc-800 text-zinc-100">
+          <DialogHeader>
+            <DialogTitle>การใช้งาน · {selectedUser?.display_name || selectedUser?.email || '-'}</DialogTitle>
+            <DialogDescription className="text-zinc-500">
+              {selectedUser?.email} · ดูรายละเอียด model & token ย้อนหลัง
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2 mb-3">
+            {[7, 30, 90].map(d => (
+              <button
+                key={d}
+                onClick={() => setUsageDays(d)}
+                className={`rounded-lg px-3 py-1 text-xs border ${usageDays === d ? 'bg-[var(--primary-color)] text-[var(--primary-foreground)] border-transparent' : 'border-zinc-700 bg-zinc-950 text-zinc-400 hover:bg-zinc-800'}`}
+              >
+                {d} วัน
+              </button>
+            ))}
+            <button
+              onClick={() => selectedUser && loadUserUsage(selectedUser.id, usageDays)}
+              disabled={usageLoading}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
+            >
+              <FiRefreshCw size={12} className={usageLoading ? 'animate-spin' : ''} /> Refresh
+            </button>
+          </div>
+          {usageLoading && !userUsage ? (
+            <div className="space-y-2 py-2">
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-32 w-full" />
+              <Skeleton className="h-32 w-full" />
+            </div>
+          ) : usageErr && !userUsage ? (
+            <div className="rounded-lg border border-red-900/50 bg-red-950/20 px-4 py-3 text-xs text-red-400">{usageErr}</div>
+          ) : userUsage ? (
+            <div className="space-y-5">
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                  <div className="text-xs text-zinc-500">Requests</div>
+                  <div className="text-lg font-bold tabular-nums">{userUsage.summary.requests.toLocaleString()}</div>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                  <div className="text-xs text-zinc-500">Total tokens</div>
+                  <div className="text-lg font-bold tabular-nums">{userUsage.summary.total_tokens.toLocaleString()}</div>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                  <div className="text-xs text-zinc-500">Prompt</div>
+                  <div className="text-lg font-bold tabular-nums">{userUsage.summary.prompt_tokens.toLocaleString()}</div>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                  <div className="text-xs text-zinc-500">Completion</div>
+                  <div className="text-lg font-bold tabular-nums">{userUsage.summary.completion_tokens.toLocaleString()}</div>
+                </div>
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+                  <div className="text-xs text-zinc-500">Images</div>
+                  <div className="text-lg font-bold tabular-nums">{userUsage.summary.images.toLocaleString()}</div>
+                </div>
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-zinc-200 mb-2">แยกตาม Model ({userUsage.models.length})</h4>
+                {userUsage.models.length === 0 ? (
+                  <p className="text-xs text-zinc-500">ยังไม่มีการใช้งานในช่วง {userUsage.days} วัน</p>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Model</TableHead>
+                        <TableHead className="text-right">Requests</TableHead>
+                        <TableHead className="text-right">Prompt</TableHead>
+                        <TableHead className="text-right">Completion</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {userUsage.models.map(m => (
+                        <TableRow key={m.model}>
+                          <TableCell className="font-mono text-xs max-w-[220px] truncate" title={m.model}>{m.model}</TableCell>
+                          <TableCell className="text-right tabular-nums">{m.requests.toLocaleString()}</TableCell>
+                          <TableCell className="text-right tabular-nums text-zinc-400">{m.prompt_tokens.toLocaleString()}</TableCell>
+                          <TableCell className="text-right tabular-nums text-zinc-400">{m.completion_tokens.toLocaleString()}</TableCell>
+                          <TableCell className="text-right tabular-nums font-medium">{m.total_tokens.toLocaleString()}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+              <div>
+                <h4 className="text-sm font-semibold text-zinc-200 mb-2">รายวัน ({userUsage.days} วัน)</h4>
+                <div className="max-h-64 overflow-y-auto rounded-lg border border-zinc-800">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Date</TableHead>
+                        <TableHead className="text-right">Requests</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {[...userUsage.daily].reverse().map(d => (
+                        <TableRow key={d.date}>
+                          <TableCell className="text-xs">{d.date}</TableCell>
+                          <TableCell className="text-right tabular-nums">{d.requests}</TableCell>
+                          <TableCell className="text-right tabular-nums">{d.total_tokens.toLocaleString()}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </div>
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
