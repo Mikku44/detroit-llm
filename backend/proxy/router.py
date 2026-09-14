@@ -71,7 +71,7 @@ def _gemini_model_for(requested: str | None) -> str:
     return settings.gemini_model
 
 _NATIVE_VISION_EXACT = {"deepseek-v4-flash-vision-exp", "grok-imagine-image", "grok-imagine-image-quality"}
-_NATIVE_VISION_PREFIXES = ("qwen", "glm-", "stealth/", "grok")
+_NATIVE_VISION_PREFIXES = ("qwen", "glm-", "stealth/", "grok", "muse-")
 
 
 def _supports_native_vision(model: str) -> bool:
@@ -514,6 +514,11 @@ FREE_TIER_EXTRA_MODELS = {"glm-4.5-air", "glm-4.7-flashx"}
 _IMAGE_ONLY_MODELS = {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304", "grok-imagine-image", "grok-imagine-image-quality", "grok-2-image", "grok-image", "grok-imagine"}
 
 MODEL_TOKEN_LIMITS: dict[str, tuple[int, int]] = {
+    "muse-spark-1.3": (65536, 131072),
+    "muse-spark-1.3-contributor": (65536, 131072),
+    "muse-spark-1.2": (65536, 131072),
+    "muse-spark-1.2-contributor": (65536, 131072),
+    "muse-spark-1.1": (65536, 131072),
     "glm-5.3": (65536, 131072),
     "glm-5.3-flash": (65536, 131072),
     "glm-5.2": (65536, 131072),
@@ -2680,6 +2685,16 @@ async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: d
         resp = await _proxy_to_zai(db, user_id, model, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, model, body.get("messages", []))
 
+    # Muse Spark models route to Meta Model API (OpenAI-compatible mode).
+    if model.lower().startswith("muse-"):
+        if not settings.muse_spark_api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="Muse Spark models require MUSE_SPARK_API_KEY. Set it in the server environment.",
+            )
+        resp = await _proxy_to_muse_spark(db, user_id, model, body, is_stream, fallback_prompt_tokens)
+        return _with_log(resp, user_id, model, body.get("messages", []))
+
     if model.lower() in CLAUDE_EXTRA_MODELS:
         if not settings.anthropic_api_key:
             raise HTTPException(status_code=503, detail="Claude models require ANTHROPIC_API_KEY. Set it in the server environment.")
@@ -2928,6 +2943,17 @@ async def responses_api(
             db, user_id, model, body, is_stream, fallback_prompt_tokens
         )
 
+    # Muse Spark models route to Meta Model API Responses endpoint.
+    if model.lower().startswith("muse-"):
+        if not settings.muse_spark_api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="Muse Spark models require MUSE_SPARK_API_KEY. Set it in the server environment.",
+            )
+        return await _proxy_muse_spark_responses(
+            db, user_id, model, body, is_stream, fallback_prompt_tokens
+        )
+
     if not settings.deepseek_api_key:
         raise HTTPException(status_code=503, detail="Responses API unavailable: no DeepSeek key configured")
 
@@ -3026,6 +3052,7 @@ def _image_engine_model(model: str) -> str:
     if (
         engine.lower().startswith("qwen")
         or engine.lower().startswith("glm-") or engine.lower() == "stealth/ox-alpha"
+        or engine.lower().startswith("muse-")
         or engine.lower().startswith("grok")
         or engine.startswith("gemini-")
         or engine in ("gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304", "grok-imagine-image", "grok-imagine-image-quality", "z-image-turbo")
@@ -3352,6 +3379,36 @@ async def anthropic_messages(
                 await _log_usage(db, user_id, upstream_model, prompt_tokens, output_tokens)
                 r = JSONResponse(content=data, status_code=resp.status_code)
                 return _wrap_claude_response(r, user_id) if is_claude else r
+    # Muse Spark via Meta Messages API (Anthropic-compatible). Forward raw body.
+    if raw_claude.startswith("muse-") or model.lower().startswith("muse-"):
+        if not settings.muse_spark_api_key:
+            raise HTTPException(status_code=503, detail="Muse Spark models require MUSE_SPARK_API_KEY. Set it in the server environment.")
+        upstream_model = body.get("model") or model
+        url = f"{settings.muse_spark_url.rstrip('/')}/messages"
+        headers = _muse_spark_headers()
+        if is_stream:
+            async def muse_messages_stream():
+                prompt_tokens = 0
+                output_tokens = 0
+                async with httpx.AsyncClient(timeout=300, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+                    async with client.stream("POST", url, json=body, headers=headers) as resp:
+                        async for chunk in resp.aiter_bytes():
+                            yield chunk
+                if not prompt_tokens:
+                    prompt_tokens = fallback_prompt_tokens
+                await _log_usage(db, user_id, upstream_model, prompt_tokens, output_tokens)
+            return StreamingResponse(_deadline_wrapper(muse_messages_stream()), media_type="text/event-stream")
+        async with httpx.AsyncClient(timeout=120, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+            resp = await client.post(url, json=body, headers=headers)
+            try:
+                data = resp.json()
+            except Exception:
+                data = {"error": resp.text}
+            usage = data.get("usage") or {}
+            prompt_tokens = usage.get("input_tokens", 0) or fallback_prompt_tokens
+            output_tokens = usage.get("output_tokens", 0)
+            await _log_usage(db, user_id, upstream_model, prompt_tokens, output_tokens)
+            return JSONResponse(content=data, status_code=resp.status_code)
     has_image = _anthropic_has_image(body)
     has_video = _anthropic_has_video(body)
     if has_image or has_video:
@@ -3729,6 +3786,13 @@ def _zai_headers() -> dict:
     }
 
 
+def _muse_spark_headers() -> dict:
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.muse_spark_api_key}",
+    }
+
+
 def _openrouter_body(body: dict) -> dict:
     """Normalize a chat body for OpenRouter.
 
@@ -3864,6 +3928,127 @@ async def _proxy_to_zai(
             content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
             completion_tokens = count_text_tokens(content)
         await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+        return JSONResponse(content=data, status_code=resp.status_code)
+
+
+async def _proxy_to_muse_spark(
+    db: AsyncSession,
+    user_id: str,
+    model: str,
+    body: dict,
+    is_stream: bool,
+    fallback_prompt_tokens: int,
+):
+    """Proxy a chat-completions request to Meta Model API (Muse Spark).
+
+    Meta exposes an OpenAI-compatible endpoint at
+    {muse_spark_url}/chat/completions, so the existing stream
+    passthrough + usage parsing work unchanged.
+    """
+    url = f"{settings.muse_spark_url.rstrip('/')}/chat/completions"
+    headers = _muse_spark_headers()
+    if is_stream:
+        async def muse_spark_stream():
+            prompt_tokens = 0
+            completion_tokens = 0
+            completion_text = ""
+            try:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+                    async with client.stream("POST", url, json=body, headers=headers) as resp:
+                        if resp.status_code >= 400:
+                            error_body = await resp.aread()
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_error_chunk(f"⚠️ {model}: {msg} — Please try again later.", model)
+                            yield b'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+                            yield b'data: [DONE]\n\n'
+                            return
+                        async for chunk in resp.aiter_bytes():
+                            usage = _parse_usage_from_chunk(chunk)
+                            if usage:
+                                prompt_tokens = usage.get("prompt_tokens", prompt_tokens)
+                                completion_tokens = usage.get("completion_tokens", completion_tokens)
+                            completion_text += _text_from_chunk(chunk)
+                            yield chunk
+            finally:
+                if not prompt_tokens:
+                    prompt_tokens = fallback_prompt_tokens
+                if not completion_tokens:
+                    completion_tokens = count_text_tokens(completion_text)
+                await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+        return StreamingResponse(_deadline_wrapper(muse_spark_stream()), media_type="text/event-stream")
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        data = resp.json()
+        usage = data.get("usage") or {}
+        prompt_tokens = usage.get("prompt_tokens", 0) or fallback_prompt_tokens
+        completion_tokens = usage.get("completion_tokens", 0)
+        if not completion_tokens:
+            content = (data.get("choices") or [{}])[0].get("message", {}).get("content") or ""
+            completion_tokens = count_text_tokens(content)
+        await _log_usage(
+            db,
+            user_id,
+            model,
+            prompt_tokens,
+            completion_tokens,
+        )
+        return JSONResponse(content=data, status_code=resp.status_code)
+
+
+async def _proxy_muse_spark_responses(
+    db: AsyncSession,
+    user_id: str,
+    model: str,
+    body: dict,
+    is_stream: bool,
+    fallback_prompt_tokens: int,
+):
+    """Proxy a Responses API request to Meta Model API (`POST /v1/responses`)."""
+    url = f"{settings.muse_spark_url.rstrip('/')}/responses"
+    headers = _muse_spark_headers()
+    if is_stream:
+        async def muse_spark_responses_stream():
+            prompt_tokens = 0
+            completion_tokens = 0
+            completion_text = ""
+            try:
+                async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+                    async with client.stream("POST", url, json=body, headers=headers) as resp:
+                        if resp.status_code >= 400:
+                            error_body = await resp.aread()
+                            msg = _extract_upstream_error_message(error_body, f"Upstream error {resp.status_code}")
+                            yield _sse_event("error", {"type": "error", "code": "upstream_error", "message": f"⚠️ {model}: {msg}"}).encode()
+                            yield _sse_event("response.completed", {"type": "response.completed", "response": {"id": f"resp_{int(time.time())}", "object": "response", "status": "failed", "model": model, "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": f"⚠️ {model}: {msg} — Please try again later."}]}]}}).encode()
+                            return
+                        async for chunk in resp.aiter_bytes():
+                            usage = _responses_usage_from_chunk(chunk)
+                            if usage:
+                                prompt_tokens = usage.get("input_tokens") or prompt_tokens
+                                completion_tokens = usage.get("output_tokens") or completion_tokens
+                            completion_text += _responses_text_from_chunk(chunk)
+                            yield chunk
+            finally:
+                if not prompt_tokens:
+                    prompt_tokens = fallback_prompt_tokens
+                if not completion_tokens:
+                    completion_tokens = count_text_tokens(completion_text)
+                await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
+        return StreamingResponse(_deadline_wrapper(muse_spark_responses_stream()), media_type="text/event-stream")
+    async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
+        resp = await client.post(url, json=body, headers=headers)
+        data = resp.json()
+        usage = data.get("usage") or {}
+        prompt_tokens = usage.get("input_tokens", 0) or fallback_prompt_tokens
+        completion_tokens = usage.get("output_tokens", 0)
+        if not completion_tokens:
+            completion_tokens = count_text_tokens(_responses_output_text(data))
+        await _log_usage(
+            db,
+            user_id,
+            model,
+            prompt_tokens,
+            completion_tokens,
+        )
         return JSONResponse(content=data, status_code=resp.status_code)
 
 
@@ -4373,6 +4558,36 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             "type": "model",
             "id": "glm-4.7-flashx",
             "display_name": "glm-4.7-flashx",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "muse-spark-1.3",
+            "display_name": "muse-spark-1.3",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "muse-spark-1.3-contributor",
+            "display_name": "muse-spark-1.3-contributor",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "muse-spark-1.2",
+            "display_name": "muse-spark-1.2",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "muse-spark-1.2-contributor",
+            "display_name": "muse-spark-1.2-contributor",
+        },
+        {
+            "object": "model",
+            "type": "model",
+            "id": "muse-spark-1.1",
+            "display_name": "muse-spark-1.1",
         },
         {
             "object": "model",

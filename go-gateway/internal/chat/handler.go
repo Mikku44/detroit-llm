@@ -111,7 +111,7 @@ func HandleChatCompletions(cfg config.Config, pool *pgxpool.Pool) http.HandlerFu
 			forwardToBackend(w, r, cfg.BackendURL)
 			return
 		}
-		isDirect := strings.Contains(model, "deepseek") || strings.HasPrefix(model, "glm-") || strings.HasPrefix(model, "grok") || strings.HasPrefix(model, "qwen") || model == ""
+		isDirect := strings.Contains(model, "deepseek") || strings.HasPrefix(model, "glm-") || strings.HasPrefix(model, "grok") || strings.HasPrefix(model, "qwen") || strings.HasPrefix(model, "muse-") || model == ""
 		if !isDirect {
 			forwardToBackend(w, r, cfg.BackendURL)
 			return
@@ -308,6 +308,12 @@ func pickUpstream(model string, cfg config.Config) (string, string) {
 	if strings.HasPrefix(low, "grok") {
 		if cfg.GrokAPIKey != "" {
 			return strings.TrimSuffix(cfg.GrokAPIURL, "/"), cfg.GrokAPIKey
+		}
+		return "", ""
+	}
+	if strings.HasPrefix(low, "muse-") {
+		if cfg.MuseSparkKey != "" {
+			return strings.TrimSuffix(cfg.MuseSparkURL, "/"), cfg.MuseSparkKey
 		}
 		return "", ""
 	}

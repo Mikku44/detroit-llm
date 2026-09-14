@@ -5,6 +5,7 @@ Each provider exposes a different balance surface:
   - OpenRouter: GET {openrouter_url}/credits     -> credits_left/total/used
   - DashScope: no public balance REST endpoint via API key alone
   - Gemini:    free tier, no balance endpoint
+  - Muse Spark (Meta): no public balance endpoint via API key alone
   - SGLang:    local inference, no account balance
   - Stripe:    GET https://api.stripe.com/v1/balance (available/pending)
 
@@ -25,6 +26,7 @@ _PROVIDERS = (
     ("zai", "Z.AI", settings.z_ai_url, settings.z_api_key),
     ("dashscope", "DashScope", settings.dashscope_url, settings.dashscope_api_key),
     ("gemini", "Gemini", settings.gemini_url, settings.gemini_api_key),
+    ("muse_spark", "Muse Spark", settings.muse_spark_url, settings.muse_spark_api_key),
 )
 
 
@@ -162,6 +164,7 @@ async def check_provider_balances() -> dict:
             reason = {
                 "dashscope": "DashScope has no public balance endpoint via API key",
                 "gemini": "Gemini is free tier; no balance endpoint",
+                "muse_spark": "Muse Spark has no public balance endpoint via API key",
             }[key]
             results[key] = _unsupported(key, reason)
 

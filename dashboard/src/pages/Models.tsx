@@ -32,6 +32,11 @@ const MODELS: ModelInfo[] = [
   // { id: 'grok-imagine-image', tag: 'Image', desc: 'grok-imagine-image (xAI Grok) — text-to-image generation', ctx: '1024×1024', maxOut: '—', tier: 'paid' }, // hidden for now
   { id: 'glm-5.3', tag: 'Reasoning', desc: 'GLM-5.3 — 1M context / 128K max (131,072)', ctx: '1M', maxOut: '128K', tier: 'paid' },
   { id: 'glm-5.3-flash', tag: 'Reasoning', desc: 'GLM-5.3-Flash — 1M context / 128K max (131,072)', ctx: '1M', maxOut: '128K', tier: 'paid' },
+  { id: 'muse-spark-1.3', tag: 'Agentic', desc: 'Muse Spark 1.3 (Meta) — 1M context / 128K max, text+image+video+PDF', ctx: '1M', maxOut: '128K', tier: 'paid', highlight: true },
+  { id: 'muse-spark-1.3-contributor', tag: 'Agentic', desc: 'Muse Spark 1.3 Contributor — discounted contributor tier, same 1M context', ctx: '1M', maxOut: '128K', tier: 'paid' },
+  { id: 'muse-spark-1.2', tag: 'Agentic', desc: 'Muse Spark 1.2 (Meta) — 1M context agentic coding', ctx: '1M', maxOut: '128K', tier: 'paid' },
+  { id: 'muse-spark-1.2-contributor', tag: 'Agentic', desc: 'Muse Spark 1.2 Contributor — discounted contributor tier', ctx: '1M', maxOut: '128K', tier: 'paid' },
+  { id: 'muse-spark-1.1', tag: 'Agentic', desc: 'Muse Spark 1.1 (Meta) — earlier checkpoint, 1M context', ctx: '1M', maxOut: '128K', tier: 'paid' },
   { id: 'glm-4.5-air', tag: 'Reasoning', desc: 'GLM-4.5-Air — lightweight reasoning 65,536 / 98,304', ctx: '98K', maxOut: '98K', tier: 'free' },
   { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX — high-speed reasoning 65,536 / 131,072', ctx: '1M', maxOut: '131K', tier: 'free' },
 ]

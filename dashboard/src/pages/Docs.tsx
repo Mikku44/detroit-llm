@@ -592,6 +592,8 @@ export default function Docs() {
             },
             { id: 'glm-5.3', tag: 'Reasoning', desc: 'GLM-5.3 (Z.AI) — 1M context / max 128K output (131,072)', ctx: '1M context', size: '128K max', highlight: false },
             { id: 'glm-5.3-flash', tag: 'Reasoning', desc: 'GLM-5.3-Flash (Z.AI) — 1M context / max 128K output (131,072)', ctx: '1M context', size: '128K max', highlight: false },
+            { id: 'muse-spark-1.3', tag: 'Agentic', desc: 'Muse Spark 1.3 (Meta) — 1M context / max 128K output, text+image+video+PDF', ctx: '1M context', size: '128K max', highlight: true },
+            { id: 'muse-spark-1.3-contributor', tag: 'Agentic', desc: 'Muse Spark 1.3 Contributor — discounted contributor tier, same 1M context', ctx: '1M context', size: '128K max', highlight: false },
             { id: 'glm-4.5-air', tag: 'Reasoning', desc: 'GLM-4.5-Air (Z.AI) — default 65,536 / max 98,304', ctx: '98K max', size: '65K default', highlight: false },
             { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX (Z.AI) — default 65,536 / max 131,072', ctx: '131K max', size: '65K default', highlight: false },
           ].map((m) => {

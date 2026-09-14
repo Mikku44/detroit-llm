@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     z_api_key: str = Field(default="", validation_alias=AliasChoices("Z_API_KEY", "ZAI_API_KEY"))
     z_ai_url: str = "https://api.z.ai/api/paas/v4"
 
+    # Meta Model API — Muse Spark models via OpenAI-compatible API.
+    # Accepts both MUSE_SPARK_API_KEY and MODEL_API_KEY spellings.
+    muse_spark_api_key: str = Field(
+        default="", validation_alias=AliasChoices("MUSE_SPARK_API_KEY", "MODEL_API_KEY", "META_API_KEY")
+    )
+    muse_spark_url: str = "https://api.meta.ai/v1"
+    muse_spark_model: str = "muse-spark-1.3"
+
     anthropic_api_key: str = Field(default="", validation_alias=AliasChoices("ANTHROPIC_API_KEY", "ANTHROPIC_KEY", "CLAUDE_API_KEY"))
     anthropic_api_url: str = "https://api.anthropic.com"
 

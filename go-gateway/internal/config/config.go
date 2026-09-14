@@ -23,6 +23,8 @@ type Config struct {
 	GrokAPIURL         string
 	GrokAPIKey         string
 	GrokImageModel     string
+	MuseSparkURL       string
+	MuseSparkKey       string
 	ImageProvider      string
 }
 
@@ -46,6 +48,8 @@ func Load() Config {
 		GrokAPIURL:        envOr("GROK_API_URL", "https://api.x.ai/v1"),
 		GrokAPIKey:        envOr("GROK_API_KEY", envOr("XAI_API_KEY", "")),
 		GrokImageModel:    envOr("GROK_IMAGE_MODEL", "grok-imagine-image"),
+		MuseSparkURL:      envOr("MUSE_SPARK_URL", "https://api.meta.ai/v1"),
+		MuseSparkKey:      envOr("MUSE_SPARK_API_KEY", envOr("MODEL_API_KEY", "")),
 		ImageProvider:     envOr("IMAGE_PROVIDER", "auto"),
 	}
 }

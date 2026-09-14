@@ -180,6 +180,7 @@ export default function Landing() {
               { id: 'z-image-turbo', tag: 'Image', desc: 'z-image-turbo — high-quality 1024×1024 image generation', ctx: '1024×1024', size: '—' },
               { id: 'glm-5.3', tag: 'Reasoning', desc: 'GLM-5.3 — 1M context / max 128K output', ctx: '1M context', size: '128K max' },
               { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX — fast and efficient', ctx: '131K max', size: '65K default' },
+              { id: 'muse-spark-1.3', tag: 'Agentic', desc: 'Muse Spark 1.3 — Meta agentic coding, 1M context', ctx: '1M context', size: '128K max' },
             ].map((m) => (
               <div key={m.id} className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
                 <div className="flex items-center justify-between mb-2 gap-2">
