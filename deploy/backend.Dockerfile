@@ -1,10 +1,13 @@
 # syntax=docker/dockerfile:1.4
 # ---- Stage 1: build frontend ----
-FROM node:24-alpine AS frontend
+# NOTE: debian-slim (glibc), not alpine (musl). lightningcss/tailwind v4's
+# optional musl binary (lightningcss.linux-x64-musl.node) is flaky on alpine
+# and fails with MODULE_NOT_FOUND. glibc build stage is reliable.
+FROM node:24-bookworm-slim AS frontend
 
 WORKDIR /build/dashboard
 COPY dashboard/package.json dashboard/package-lock.json ./
-RUN npm install
+RUN npm ci
 
 COPY dashboard/ ./
 RUN npm run build
