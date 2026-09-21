@@ -505,15 +505,22 @@ async def require_access(
 
 
 FREE_MODEL_ONLY_MESSAGE = (
-    "Free tier only includes the flash and glm-5.3-flash models. "
+    "Free tier only includes the flash, glm-4.5-air/glm-4.7-flashx and gpt-5-nano models. "
     "Upgrade to a paid membership for pro and other models."
 )
 
-FREE_TIER_EXTRA_MODELS = {"glm-4.5-air", "glm-4.7-flashx"}
+FREE_TIER_EXTRA_MODELS = {"glm-4.5-air", "glm-4.7-flashx", "gpt-5-nano", "openai/gpt-5-nano"}
+
+# GPT chat models routed to OpenRouter (OpenAI-compatible). Available on all
+# tiers, including free.
+GPT_NANO_MODELS = {"gpt-5-nano", "openai/gpt-5-nano"}
+GPT_NANO_UPSTREAM_ID = "openai/gpt-5-nano"
 
 _IMAGE_ONLY_MODELS = {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304", "grok-imagine-image", "grok-imagine-image-quality", "grok-2-image", "grok-image", "grok-imagine"}
 
 MODEL_TOKEN_LIMITS: dict[str, tuple[int, int]] = {
+    "gpt-5-nano": (65536, 131072),
+    "openai/gpt-5-nano": (65536, 131072),
     "muse-spark-1.3": (65536, 131072),
     "muse-spark-1.3-contributor": (65536, 131072),
     "muse-spark-1.2": (65536, 131072),
@@ -2701,6 +2708,17 @@ async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: d
         resp = await _proxy_to_anthropic(db, user_id, model, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, model, body.get("messages", []))
 
+    # GPT models route to OpenRouter (OpenAI-compatible mode, all tiers).
+    if model.lower() in GPT_NANO_MODELS:
+        if not settings.openrouter_api_key:
+            raise HTTPException(
+                status_code=503,
+                detail="gpt-5-nano requires OPENROUTER_API_KEY. Set it in the server environment.",
+            )
+        body["model"] = GPT_NANO_UPSTREAM_ID
+        resp = await _proxy_to_openrouter(db, user_id, GPT_NANO_UPSTREAM_ID, body, is_stream, fallback_prompt_tokens)
+        return _with_log(resp, user_id, GPT_NANO_UPSTREAM_ID, body.get("messages", []))
+
     # If a DeepSeek key is configured, proxy to the real DeepSeek API.
     if settings.deepseek_api_key:
         resp = await _proxy_to_deepseek(db, user_id, model, body, is_stream, fallback_prompt_tokens)
@@ -3051,6 +3069,7 @@ def _image_engine_model(model: str) -> str:
     engine = _resolve_model(model)
     if (
         engine.lower().startswith("qwen")
+        or engine.lower().startswith("gpt-") or engine.lower().startswith("openai/")
         or engine.lower().startswith("glm-") or engine.lower() == "stealth/ox-alpha"
         or engine.lower().startswith("muse-")
         or engine.lower().startswith("grok")
@@ -4496,6 +4515,12 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
         {
             "object": "model",
             "type": "model",
+            "id": "gpt-5-nano",
+            "display_name": "gpt-5-nano",
+        },
+        {
+            "object": "model",
+            "type": "model",
             "id": "claude-haiku-4-5",
             "display_name": "claude-haiku-4-5",
         },
@@ -4559,36 +4584,7 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
             "id": "glm-4.7-flashx",
             "display_name": "glm-4.7-flashx",
         },
-        {
-            "object": "model",
-            "type": "model",
-            "id": "muse-spark-1.3",
-            "display_name": "muse-spark-1.3",
-        },
-        {
-            "object": "model",
-            "type": "model",
-            "id": "muse-spark-1.3-contributor",
-            "display_name": "muse-spark-1.3-contributor",
-        },
-        {
-            "object": "model",
-            "type": "model",
-            "id": "muse-spark-1.2",
-            "display_name": "muse-spark-1.2",
-        },
-        {
-            "object": "model",
-            "type": "model",
-            "id": "muse-spark-1.2-contributor",
-            "display_name": "muse-spark-1.2-contributor",
-        },
-        {
-            "object": "model",
-            "type": "model",
-            "id": "muse-spark-1.1",
-            "display_name": "muse-spark-1.1",
-        },
+        # NOTE: muse-spark-* hidden for now (uncomment to re-enable).
         {
             "object": "model",
             "type": "model",

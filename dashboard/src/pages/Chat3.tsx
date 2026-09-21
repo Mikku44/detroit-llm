@@ -71,11 +71,7 @@ const ALLOWED_CHAT_MODELS = new Set([
   'glm-5.3-flash',
   'glm-4.5-air',
   'glm-4.7-flashx',
-  'muse-spark-1.3',
-  'muse-spark-1.3-contributor',
-  'muse-spark-1.2',
-  'muse-spark-1.2-contributor',
-  'muse-spark-1.1',
+  // NOTE: muse-spark-* hidden for now
   'claude-haiku-4-5',
   'claude-sonnet-4-6',
   'claude-sonnet-5',
@@ -510,7 +506,7 @@ export default function Chat3() {
   const [membersUrl, setMembersUrl] = useState('')
   const [upgradeOpen, setUpgradeOpen] = useState(false)
   const [copied, setCopied] = useState<string | null>(null)
-  const [model, setModel] = useState('qwen3.8-flash')
+  const [model, setModel] = useState('deepseek-v4-flash')
   const [models, setModels] = useState<string[]>([])
   const [modelOpen, setModelOpen] = useState(false)
   const [modelsLoading, setModelsLoading] = useState(true)
@@ -725,7 +721,7 @@ export default function Chat3() {
         if (toShow.length) {
           setModels(toShow)
           setModel((cur) =>
-            cur && toShow.includes(cur) ? cur : toShow.includes('qwen3.8-flash') ? 'qwen3.8-flash' : toShow.find((id: string) => id.includes('flash')) || toShow[0]
+            cur && toShow.includes(cur) ? cur : toShow.includes('deepseek-v4-flash') ? 'deepseek-v4-flash' : toShow.find((id: string) => id.includes('flash')) || toShow[0]
           )
         }
       })

@@ -40,6 +40,7 @@ var imageOnlyModels = map[string]bool{
 
 var freeTierExtraModels = map[string]bool{
 	"glm-4.5-air": true, "glm-4.7-flashx": true,
+	"gpt-5-nano": true, "openai/gpt-5-nano": true,
 }
 
 var paidFlashExclusions = map[string]bool{

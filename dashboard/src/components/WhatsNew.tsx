@@ -19,6 +19,16 @@ export interface UpdateItem {
 
 export const whatsNewItems: UpdateItem[] = [
   {
+    id: "10",
+    title: "New model: GPT-5 Nano",
+    description: "GPT-5 Nano is available — fastest cheap chat (OpenAI via OpenRouter), 400K context / 128K max output, free for all tiers. Try it in chat or via the API.",
+    tag: "MODELS",
+    date: "Sep 21, 2026",
+    image: "/whatsnew/GPT-5-nano_r4lbpe.png",
+    href: "/models",
+    icon: Sparkles,
+  },
+  {
     id: "9",
     title: "Custom max output tokens",
     description: "Set your own response length in chat — click Custom next to the 1k / 2k / 4k / 8k presets and type any value from 256 to 131,072 tokens.",
