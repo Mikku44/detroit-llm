@@ -1,0 +1,40 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "detroit-go-gateway",
+  "main": "src/cloudflare.js",
+  "compatibility_date": "2026-09-24",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "GO_GATEWAY_PORT": "8080",
+    "BACKEND_URL": "https://chat.khain.app",
+    "SGLANG_URL": "https://chat.khain.app",
+    "DASHBOARD_URL": "https://chat.khain.app",
+    "RATE_LIMIT_PER_MINUTE": "60",
+    "IMAGE_PROVIDER": "auto"
+  },
+  "containers": [
+    {
+      "class_name": "GoGatewayContainer",
+      "image": "./Dockerfile",
+      "instance_type": "basic",
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "GO_GATEWAY_CONTAINER",
+        "class_name": "GoGatewayContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["GoGatewayContainer"]
+    }
+  ]
+}

@@ -13,3 +13,6 @@ backend/data/
 # compiled python (may embed secrets)
 __pycache__/
 *.pyc
+go-gateway/node_modules/
+go-gateway/dist/
+.wrangler/
