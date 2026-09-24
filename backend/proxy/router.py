@@ -630,6 +630,8 @@ async def _is_free_user(db: AsyncSession, user_id: str) -> bool:
 
 
 async def _claude_tier_gate(db: AsyncSession, user_id: str, model: str):
+    if model.lower() in CLAUDE_EXTRA_MODELS and not settings.claude_enabled:
+        raise HTTPException(status_code=403, detail="Claude models are temporarily unavailable")
     if model.lower() not in CLAUDE_EXTRA_MODELS:
         return
     from sqlalchemy import select
@@ -4493,6 +4495,8 @@ async def list_models(request: Request, db: AsyncSession = Depends(get_db)):
                     free_user = False
         except HTTPException:
             free_user = False
+    if not settings.claude_enabled:
+        can_see_claude = False
     gateway_models = [
         {
             "object": "model",

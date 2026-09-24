@@ -48,16 +48,17 @@ export const whatsNewItems: UpdateItem[] = [
     href: "/models",
     icon: Sparkles,
   },
-  {
-    id: "7",
-    title: "Claude Extra — Haiku 4.5 / Sonnet 4.6 / 5 / Fable 5.1",
-    description: "Direct Claude API via Anthropic — requires an Extra Claude pack (Dreamer Extra 100K input / 28K output), concurrent limit 2",
-    tag: "EXTRA",
-    date: "Sep 2, 2026",
-    image: "/whatsnew/claude.jpg",
-    href: "/models",
-    icon: Sparkles,
-  },
+  // NOTE: Claude Extra hidden for now (set CLAUDE_ENABLED=true on the backend to restore)
+  // {
+  //   id: "7",
+  //   title: "Claude Extra — Haiku 4.5 / Sonnet 4.6 / 5 / Fable 5.1",
+  //   description: "Direct Claude API via Anthropic — requires an Extra Claude pack (Dreamer Extra 100K input / 28K output), concurrent limit 2",
+  //   tag: "EXTRA",
+  //   date: "Sep 2, 2026",
+  //   image: "/whatsnew/claude.jpg",
+  //   href: "/models",
+  //   icon: Sparkles,
+  // },
   {
     id: "6",
     title: "Models Ranking — Compare Top Models",

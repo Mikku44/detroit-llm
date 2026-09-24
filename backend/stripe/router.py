@@ -8,7 +8,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.config import settings, TIER_OPTIONS
+from backend.config import settings, visible_tiers
 from backend.auth.session import require_session
 from backend.db.database import get_db
 from backend.db.models import User, Payment
@@ -61,8 +61,10 @@ async def create_checkout(
 
     body = await request.json()
     tier_id = (body.get("tier_id") or "").strip().lower()
-    tier = next((t for t in TIER_OPTIONS if t["id"] == tier_id), None)
+    tier = next((t for t in visible_tiers() if t["id"] == tier_id), None)
     if not tier or tier_id == "free":
+        if "extra_claude" in tier_id and not settings.claude_enabled:
+            raise HTTPException(status_code=400, detail="This plan is temporarily unavailable")
         raise HTTPException(status_code=400, detail=f"Unknown tier: {tier_id}")
 
     payment_method = (body.get("payment_method") or "card").strip().lower()

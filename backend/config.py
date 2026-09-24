@@ -41,6 +41,9 @@ class Settings(BaseSettings):
 
     anthropic_api_key: str = Field(default="", validation_alias=AliasChoices("ANTHROPIC_API_KEY", "ANTHROPIC_KEY", "CLAUDE_API_KEY"))
     anthropic_api_url: str = "https://api.anthropic.com"
+    # Extra-Claude models + tiers kill-switch. False hides them from /v1/models,
+    # the tier list and new Stripe checkouts (existing subscribers keep working).
+    claude_enabled: bool = False
 
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
@@ -215,6 +218,18 @@ TIER_OPTIONS = [
 
 
 settings = Settings()
+
+
+def visible_tiers() -> list[dict]:
+    """Tiers shown for purchase and listing.
+
+    While ``claude_enabled`` is off, the Extra-Claude packs
+    (``*_extra_claude``) are hidden from the tier list and new checkouts.
+    Existing subscribers keep their limits via the full ``TIER_OPTIONS``.
+    """
+    if settings.claude_enabled:
+        return TIER_OPTIONS
+    return [t for t in TIER_OPTIONS if "extra_claude" not in t["id"]]
 
 
 def _assert_secure_secrets() -> None:

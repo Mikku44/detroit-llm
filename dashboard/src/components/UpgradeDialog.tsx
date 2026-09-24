@@ -54,7 +54,11 @@ export default function UpgradeDialog({
     setSubError(null)
     api
       .getUsageLimits()
-      .then((l) => setTiers((l.tiers || []).filter((t: Tier) => t.id !== 'free')))
+      // NOTE: Extra-Claude tiers hidden for now (also filtered by the backend
+      // via visible_tiers(); this guards against a cached limits response).
+      .then((l) =>
+        setTiers((l.tiers || []).filter((t: Tier) => t.id !== 'free' && !t.id.includes('extra_claude'))),
+      )
       .catch(() => setTiers([]))
     api
       .health()

@@ -72,10 +72,11 @@ const ALLOWED_CHAT_MODELS = new Set([
   'glm-4.5-air',
   'glm-4.7-flashx',
   // NOTE: muse-spark-* hidden for now
-  'claude-haiku-4-5',
-  'claude-sonnet-4-6',
-  'claude-sonnet-5',
-  'claude-fable-5-1',
+  // NOTE: claude-* hidden for now (set CLAUDE_ENABLED=true on the backend to restore)
+  // 'claude-haiku-4-5',
+  // 'claude-sonnet-4-6',
+  // 'claude-sonnet-5',
+  // 'claude-fable-5-1',
 ])
 
 const MODEL_META: Record<string, ModelMeta> = {
@@ -165,26 +166,27 @@ const MODEL_META: Record<string, ModelMeta> = {
     desc: 'Text + Image — understands images & text',
     badges: ['text', 'image'],
   },
-  'claude-haiku-4-5': {
-    name: 'Claude Haiku 4.5',
-    desc: 'Extra Claude — fastest, 200K context',
-    badges: ['text', 'extra-claude'],
-  },
-  'claude-sonnet-4-6': {
-    name: 'Claude Sonnet 4.6',
-    desc: 'Extra Claude — balanced reasoning',
-    badges: ['text', 'extra-claude'],
-  },
-  'claude-sonnet-5': {
-    name: 'Claude Sonnet 5',
-    desc: 'Extra Claude — flagship reasoning',
-    badges: ['text', 'extra-claude'],
-  },
-  'claude-fable-5-1': {
-    name: 'Claude Fable 5.1',
-    desc: 'Extra Claude — creative / long-form',
-    badges: ['text', 'extra-claude'],
-  },
+  // NOTE: claude-* hidden for now (set CLAUDE_ENABLED=true on the backend to restore)
+  // 'claude-haiku-4-5': {
+  //   name: 'Claude Haiku 4.5',
+  //   desc: 'Extra Claude — fastest, 200K context',
+  //   badges: ['text', 'extra-claude'],
+  // },
+  // 'claude-sonnet-4-6': {
+  //   name: 'Claude Sonnet 4.6',
+  //   desc: 'Extra Claude — balanced reasoning',
+  //   badges: ['text', 'extra-claude'],
+  // },
+  // 'claude-sonnet-5': {
+  //   name: 'Claude Sonnet 5',
+  //   desc: 'Extra Claude — flagship reasoning',
+  //   badges: ['text', 'extra-claude'],
+  // },
+  // 'claude-fable-5-1': {
+  //   name: 'Claude Fable 5.1',
+  //   desc: 'Extra Claude — creative / long-form',
+  //   badges: ['text', 'extra-claude'],
+  // },
 }
 
 const BADGE_STYLES: Record<string, string> = {
@@ -223,10 +225,11 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'muse-spark-1.2-contributor': 1048576,
   'muse-spark-1.1': 1048576,
   'gemini-2.5-flash': 1000000,
-  'claude-haiku-4-5': 200000,
-  'claude-sonnet-4-6': 200000,
-  'claude-sonnet-5': 200000,
-  'claude-fable-5-1': 200000,
+  // NOTE: claude-* hidden for now (set CLAUDE_ENABLED=true on the backend to restore)
+  // 'claude-haiku-4-5': 200000,
+  // 'claude-sonnet-4-6': 200000,
+  // 'claude-sonnet-5': 200000,
+  // 'claude-fable-5-1': 200000,
 }
 
 const DEFAULT_CONTEXT_LIMIT = 1000000

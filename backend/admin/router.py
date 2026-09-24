@@ -7,7 +7,7 @@ from sqlalchemy import select, func, cast, Date
 import time as _time
 from cachetools import TTLCache
 
-from backend.config import settings, TIER_OPTIONS
+from backend.config import settings, TIER_OPTIONS, visible_tiers
 from backend.db.database import get_db, _is_postgres
 from backend.db.models import User, ApiKey, UsageLog, ImageUsage, Payment
 from backend.auth.session import require_session
@@ -259,7 +259,7 @@ async def get_usage_limits(
         "monthly_used": monthly_used,
         "image_quota": image_quota,
         "images_used": images_used,
-        "tiers": TIER_OPTIONS,
+        "tiers": visible_tiers(),
     }
     _limits_cache[user_id] = resp
     return resp
