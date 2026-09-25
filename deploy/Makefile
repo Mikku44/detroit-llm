@@ -2,7 +2,7 @@ COMPOSE := docker compose
 COMPOSE_SH := docker compose --profile selfhosted
 ENV_FILE  := .env
 
-.PHONY: all build up up-selfhosted down restart logs ps clean health help docker bench bench-py
+.PHONY: all build build-web up up-selfhosted down restart logs ps clean health help docker bench bench-py
 
 all: build up
 
@@ -10,6 +10,9 @@ docker: all
 
 build:
 	$(COMPOSE) build
+
+build-web:
+	$(COMPOSE) build web
 
 build-nc:
 	$(COMPOSE) build --no-cache
@@ -64,6 +67,7 @@ help:
 	@echo "  all            build + up (default, == docker)"
 	@echo "  docker         alias for all"
 	@echo "  build          docker compose build (all services: backend, go-gateway, web)"
+	@echo "  build-web      build frontend + Caddy web image only"
 	@echo "  build-nc       build --no-cache"
 	@echo "  up             up -d (needs deploy/.env)"
 	@echo "  up-selfhosted  up -d --build with postgres (profile selfhosted)"

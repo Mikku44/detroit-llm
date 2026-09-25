@@ -12,5 +12,5 @@ backend/tests/
 .opencode/
 .git/
 dashboard/node_modules/
-# NOTE: dashboard/dist/ must be INCLUDED (frontend is prebuilt on host).
+dashboard/dist/
 deploy/.env
