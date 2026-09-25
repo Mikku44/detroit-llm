@@ -36,7 +36,7 @@ const MODELS: ModelInfo[] = [
   // NOTE: muse-spark-* hidden for now
   { id: 'glm-4.5-air', tag: 'Reasoning', desc: 'GLM-4.5-Air — lightweight reasoning 65,536 / 98,304', ctx: '98K', maxOut: '98K', tier: 'free' },
   { id: 'glm-4.7-flashx', tag: 'Reasoning', desc: 'GLM-4.7-FlashX — high-speed reasoning 65,536 / 131,072', ctx: '1M', maxOut: '131K', tier: 'free' },
-  { id: 'gpt-5-nano', tag: 'Fast', desc: 'GPT-5 Nano (OpenAI via OpenRouter) — fastest cheap chat for all tiers', ctx: '400K', maxOut: '128K', tier: 'free', highlight: true },
+  { id: 'gpt-5-nano', tag: 'Fast', desc: 'GPT-5 Nano (OpenAI direct) — fastest cheap chat for all tiers', ctx: '400K', maxOut: '128K', tier: 'free', highlight: true },
 ]
 
 type RankRow = {

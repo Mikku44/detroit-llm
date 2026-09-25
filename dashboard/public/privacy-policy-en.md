@@ -27,7 +27,7 @@ This policy explains how we collect, use, and protect your data when you use Det
 
 ## 4. Third-party processors
 
-Your prompts are sent only to the provider of the model you select: **DeepSeek**, **Alibaba Cloud DashScope (Qwen)**, **Z.AI (GLM)**, **Anthropic (Claude)**, **Google (Gemini)**, **xAI (Grok)**, and **OpenRouter** (fallback) — plus **Stripe** (payments) and **R2** (file storage). Data is handled under each provider's terms. We **never sell** or exchange your personal data or chat history for commercial gain.
+Your prompts are sent only to the provider of the model you select: **OpenAI (GPT)**, **DeepSeek**, **Alibaba Cloud DashScope (Qwen)**, **Z.AI (GLM)**, **Anthropic (Claude)**, **Google (Gemini)**, **xAI (Grok)**, and **OpenRouter** (fallback) — plus **Stripe** (payments) and **R2** (file storage). Data is handled under each provider's terms. We **never sell** or exchange your personal data or chat history for commercial gain.
 
 ## 5. Security
 

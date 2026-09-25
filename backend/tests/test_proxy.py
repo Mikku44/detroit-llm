@@ -796,6 +796,71 @@ def test_openrouter_body_forces_reasoning_when_disabled():
     assert _openrouter_body({"model": "stealth/ox-alpha"}) == {"model": "stealth/ox-alpha"}
 
 
+def test_openai_body_normalizes_gpt5_parameters():
+    from backend.proxy.router import _openai_body
+
+    body = _openai_body(
+        {
+            "model": "gpt-5-nano",
+            "max_tokens": 2048,
+            "reasoning": {"effort": "low"},
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "logprobs": True,
+        }
+    )
+    assert body["max_completion_tokens"] == 2048
+    assert body["reasoning_effort"] == "low"
+    assert "max_tokens" not in body
+    assert "reasoning" not in body
+    assert "temperature" not in body
+    assert "top_p" not in body
+    assert "logprobs" not in body
+
+
+def test_gpt_nano_requires_openai_key(client, api_key, monkeypatch):
+    from backend.config import settings
+
+    monkeypatch.setattr(settings, "openai_api_key", "")
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "gpt-5-nano", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 503
+    assert "OPENAI_API_KEY" in r.text
+
+
+def test_gpt_nano_routes_directly_to_openai(client, api_key, monkeypatch):
+    import backend.proxy.router as proxy_router
+    from backend.config import settings
+
+    captured = {}
+
+    async def fake_openai(db, user_id, model, body, is_stream, fallback_prompt_tokens):
+        captured.update(model=model, body=body, is_stream=is_stream)
+        return proxy_router.JSONResponse(
+            content={
+                "model": model,
+                "choices": [{"message": {"role": "assistant", "content": "openai reply"}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 2},
+            }
+        )
+
+    monkeypatch.setattr(settings, "openai_api_key", "sk-openai-test")
+    monkeypatch.setattr(proxy_router, "_proxy_to_openai", fake_openai)
+
+    r = client.post(
+        "/v1/chat/completions",
+        json={"model": "openai/gpt-5-nano", "messages": [{"role": "user", "content": "hi"}]},
+        headers={"Authorization": f"Bearer {api_key}"},
+    )
+    assert r.status_code == 200, r.text
+    assert captured["model"] == "gpt-5-nano"
+    assert captured["body"]["model"] == "gpt-5-nano"
+    assert captured["is_stream"] is False
+
+
 def test_openrouter_routes_to_openrouter(client, api_key, monkeypatch):
     """glm-5.3-flash is proxied to Z.AI endpoint (alias stealth/ox-alpha still works)."""
     from backend.config import settings

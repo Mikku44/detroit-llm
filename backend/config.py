@@ -28,6 +28,10 @@ class Settings(BaseSettings):
         default="", validation_alias=AliasChoices("OPENROUTER_API_KEY", "OPEN_ROUTER_API_KEY")
     )
 
+    # OpenAI — GPT models via the native OpenAI-compatible endpoint.
+    openai_url: str = "https://api.openai.com/v1"
+    openai_api_key: str = ""
+
     z_api_key: str = Field(default="", validation_alias=AliasChoices("Z_API_KEY", "ZAI_API_KEY"))
     z_ai_url: str = "https://api.z.ai/api/paas/v4"
 

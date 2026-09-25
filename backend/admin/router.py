@@ -734,6 +734,7 @@ async def get_status(
                 "deepseek_configured": bool(settings.deepseek_api_key),
                 "gemini_configured": bool(settings.gemini_api_key),
                 "zai_configured": bool(settings.z_api_key),
+                "openai_configured": bool(settings.openai_api_key),
                 "openrouter_configured": bool(settings.openrouter_api_key),
                 "muse_spark_configured": bool(settings.muse_spark_api_key),
                 "image_provider": settings.image_provider,

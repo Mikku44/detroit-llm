@@ -511,10 +511,10 @@ FREE_MODEL_ONLY_MESSAGE = (
 
 FREE_TIER_EXTRA_MODELS = {"glm-4.5-air", "glm-4.7-flashx", "gpt-5-nano", "openai/gpt-5-nano"}
 
-# GPT chat models routed to OpenRouter (OpenAI-compatible). Available on all
-# tiers, including free.
+# GPT chat models routed directly to OpenAI. Available on all tiers, including
+# free.
 GPT_NANO_MODELS = {"gpt-5-nano", "openai/gpt-5-nano"}
-GPT_NANO_UPSTREAM_ID = "openai/gpt-5-nano"
+GPT_NANO_UPSTREAM_ID = "gpt-5-nano"
 
 _IMAGE_ONLY_MODELS = {"z-image-turbo", "gpt-image-1", "dall-e-3", "gemini-2.0-flash-preview-image-generation", "glm-image", "cogview-4", "cogview-4-250304", "grok-imagine-image", "grok-imagine-image-quality", "grok-2-image", "grok-image", "grok-imagine"}
 
@@ -2710,15 +2710,15 @@ async def _handle_chat_completions_inner(db: AsyncSession, user_id: str, body: d
         resp = await _proxy_to_anthropic(db, user_id, model, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, model, body.get("messages", []))
 
-    # GPT models route to OpenRouter (OpenAI-compatible mode, all tiers).
+    # GPT models route directly to OpenAI (all tiers).
     if model.lower() in GPT_NANO_MODELS:
-        if not settings.openrouter_api_key:
+        if not settings.openai_api_key:
             raise HTTPException(
                 status_code=503,
-                detail="gpt-5-nano requires OPENROUTER_API_KEY. Set it in the server environment.",
+                detail="gpt-5-nano requires OPENAI_API_KEY. Set it in the server environment.",
             )
         body["model"] = GPT_NANO_UPSTREAM_ID
-        resp = await _proxy_to_openrouter(db, user_id, GPT_NANO_UPSTREAM_ID, body, is_stream, fallback_prompt_tokens)
+        resp = await _proxy_to_openai(db, user_id, GPT_NANO_UPSTREAM_ID, body, is_stream, fallback_prompt_tokens)
         return _with_log(resp, user_id, GPT_NANO_UPSTREAM_ID, body.get("messages", []))
 
     # If a DeepSeek key is configured, proxy to the real DeepSeek API.
@@ -3833,6 +3833,58 @@ def _openrouter_body(body: dict) -> dict:
     return body
 
 
+def _openai_headers() -> dict:
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {settings.openai_api_key}",
+    }
+
+
+def _openai_body(body: dict) -> dict:
+    """Normalize a Chat Completions payload for native GPT-5 models."""
+    body = dict(body)
+    if "max_tokens" in body:
+        body.setdefault("max_completion_tokens", body.pop("max_tokens"))
+
+    # Older GPT-5 models reject sampling/logprob controls. Ignoring them keeps
+    # existing OpenAI-compatible clients working when they send defaults.
+    body.pop("temperature", None)
+    body.pop("top_p", None)
+    body.pop("logprobs", None)
+
+    # The native API accepts reasoning_effort rather than OpenRouter's
+    # `reasoning: {effort: ...}` extension.
+    reasoning = body.pop("reasoning", None)
+    if isinstance(reasoning, dict) and "reasoning_effort" not in body:
+        effort = reasoning.get("effort")
+        if effort in {"minimal", "low", "medium", "high"}:
+            body["reasoning_effort"] = effort
+    if body.get("reasoning_effort") == "none":
+        body["reasoning_effort"] = "minimal"
+    return body
+
+
+async def _proxy_to_openai(
+    db: AsyncSession,
+    user_id: str,
+    model: str,
+    body: dict,
+    is_stream: bool,
+    fallback_prompt_tokens: int,
+):
+    """Proxy a GPT chat-completions request directly to OpenAI."""
+    return await _proxy_to_openai_compatible(
+        db,
+        user_id,
+        model,
+        _openai_body(body),
+        is_stream,
+        fallback_prompt_tokens,
+        url=f"{settings.openai_url.rstrip('/')}/chat/completions",
+        headers=_openai_headers(),
+    )
+
+
 async def _proxy_to_openrouter(
     db: AsyncSession,
     user_id: str,
@@ -3846,12 +3898,33 @@ async def _proxy_to_openrouter(
     OpenRouter exposes an OpenAI-compatible endpoint, so the existing stream
     passthrough + usage parsing work unchanged.
     """
-    url = f"{settings.openrouter_url}/chat/completions"
-    headers = _openrouter_headers()
-    body = _openrouter_body(body)
+    return await _proxy_to_openai_compatible(
+        db,
+        user_id,
+        model,
+        _openrouter_body(body),
+        is_stream,
+        fallback_prompt_tokens,
+        url=f"{settings.openrouter_url.rstrip('/')}/chat/completions",
+        headers=_openrouter_headers(),
+    )
+
+
+async def _proxy_to_openai_compatible(
+    db: AsyncSession,
+    user_id: str,
+    model: str,
+    body: dict,
+    is_stream: bool,
+    fallback_prompt_tokens: int,
+    *,
+    url: str,
+    headers: dict,
+):
+    """Shared passthrough and usage logging for compatible chat endpoints."""
 
     if is_stream:
-        async def openrouter_stream():
+        async def compatible_stream():
             prompt_tokens = 0
             completion_tokens = 0
             completion_text = ""
@@ -3879,7 +3952,7 @@ async def _proxy_to_openrouter(
                     completion_tokens = count_text_tokens(completion_text)
                 await _log_usage(db, user_id, model, prompt_tokens, completion_tokens)
 
-        return StreamingResponse(_deadline_wrapper(openrouter_stream()), media_type="text/event-stream")
+        return StreamingResponse(_deadline_wrapper(compatible_stream()), media_type="text/event-stream")
 
     async with httpx.AsyncClient(timeout=DEEPSEEK_TIMEOUT, limits=httpx.Limits(max_connections=100, max_keepalive_connections=20)) as client:
         resp = await client.post(url, json=body, headers=headers)

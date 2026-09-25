@@ -21,7 +21,7 @@ export const whatsNewItems: UpdateItem[] = [
   {
     id: "10",
     title: "New model: GPT-5 Nano",
-    description: "GPT-5 Nano is available — fastest cheap chat (OpenAI via OpenRouter), 400K context / 128K max output, free for all tiers. Try it in chat or via the API.",
+    description: "GPT-5 Nano is available — fastest cheap chat served directly by OpenAI, 400K context / 128K max output, free for all tiers. Try it in chat or via the API.",
     tag: "MODELS",
     date: "Sep 21, 2026",
     image: "/whatsnew/GPT-5-nano_r4lbpe.png",

@@ -140,7 +140,7 @@ const MODEL_META: Record<string, ModelMeta> = {
   },
   'gpt-5-nano': {
     name: 'GPT-5 Nano',
-    desc: 'Text — fast, efficient OpenAI model via OpenRouter',
+    desc: 'Text — fast, efficient model served directly by OpenAI',
     badges: ['text', 'fast'],
   },
   'muse-spark-1.3': {
