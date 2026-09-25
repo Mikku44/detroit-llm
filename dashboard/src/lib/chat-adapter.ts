@@ -2,6 +2,7 @@ import {
   type ChatModelAdapter,
   type ThreadMessage,
 } from "@assistant-ui/react";
+import { apiFetch } from "./edge";
 
 const getMessageText = (message: ThreadMessage): string => {
   const parts = "content" in message ? (message.content as readonly unknown[]) : [];
@@ -44,7 +45,7 @@ export function createApiAdapter(): ChatModelAdapter {
 
       let response: Response;
       try {
-        response = await fetch("/api/chat/stream", {
+        response = await apiFetch("/api/chat/stream", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

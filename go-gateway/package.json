@@ -4,12 +4,9 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
-    "deploy:worker-only": "wrangler deploy --containers-rollout=none",
     "check": "wrangler deploy --dry-run --outdir dist"
   },
-  "dependencies": {
-    "@cloudflare/containers": "0.3.7"
-  },
+  "dependencies": {},
   "devDependencies": {
     "wrangler": "4.137.0"
   }

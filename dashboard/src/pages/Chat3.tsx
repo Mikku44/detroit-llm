@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../lib/api'
+import { apiFetch } from '../lib/edge'
 import { Markdown } from '../components/Markdown'
 import UpgradeDialog from '../components/UpgradeDialog'
 import { FiSend, FiPlus, FiCopy, FiCheck, FiPaperclip, FiThumbsUp, FiThumbsDown, FiChevronDown, FiZap, FiX, FiArrowRight, FiFileText, FiClock, FiImage, FiSearch } from 'react-icons/fi'
@@ -707,7 +708,7 @@ export default function Chat3() {
   useEffect(() => {
     if (!sessionToken) { setModelsLoading(false); return }
     setModelsLoading(true)
-    fetch('/v1/models', {
+    apiFetch('/v1/models', {
       headers: { Authorization: `Bearer ${sessionToken}` },
     })
       .then((r) => { if (!r.ok) throw new Error('Could not load models.'); return r.json() })
@@ -899,7 +900,7 @@ export default function Chat3() {
         ...(askFirst ? { require_confirm: true } : {}),
         ...(opts?.skipConfirm ? { confirmed: true } : {}),
       }
-      const res = await fetch('/api/web/chat/completions', {
+      const res = await apiFetch('/api/web/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
         body: JSON.stringify(body), signal: controller.signal,
       })
@@ -1027,7 +1028,7 @@ export default function Chat3() {
       const history = (contextRef.current ?? messages).filter((m) => !m.error).map((m) => ({
         role: m.role, content: m.role === 'user' ? buildContent(m.content, m.attachments ?? []) : m.content,
       }))
-      const res = await fetch('/api/web/chat/compact', {
+      const res = await apiFetch('/api/web/chat/compact', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${sessionToken}` },
         body: JSON.stringify({ model, messages: history }), signal: controller.signal,
       })

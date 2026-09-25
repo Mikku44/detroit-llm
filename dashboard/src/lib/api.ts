@@ -1,3 +1,5 @@
+import { apiFetch } from './edge'
+
 const BASE = ''
 
 function getToken(): string | null {
@@ -13,7 +15,7 @@ async function request(path: string, options: RequestInit = {}): Promise<any> {
   if (token) {
     headers['Authorization'] = `Bearer ${token}`
   }
-  const res = await fetch(`${BASE}${path}`, { ...options, headers })
+  const res = await apiFetch(path, { ...options, headers })
   const ct = res.headers.get('content-type') || ''
   if (!res.ok) {
     if (ct.includes('text/html')) {
@@ -146,6 +148,8 @@ export const api = {
   deleteConversation: (id: string) => request(`/api/conversations/${id}`, { method: 'DELETE' }),
   reactMessage: (convId: string, messageId: string, reaction: 'like' | 'dislike' | null) => request(`/api/conversations/${convId}/messages/${messageId}/reaction`, { method: 'POST', body: JSON.stringify({ reaction }) }),
 
+  // OAuth entry points stay same-origin: the OAuth round-trip + redirect
+  // must live on the canonical host, not the edge hostname.
   loginUrl: () => `${BASE}/auth/youtube/login?redirect=dashboard`,
   userLoginUrl: () => `${BASE}/auth/youtube/login/user?redirect=dashboard`,
 }

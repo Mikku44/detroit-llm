@@ -1,5 +1,6 @@
 import { useState, useRef } from 'react'
 import { FiRefreshCw, FiZap, FiServer, FiActivity, FiClock, FiTrash2, FiDownload } from 'react-icons/fi'
+import { apiFetch, edgeStatus } from '../lib/edge'
 
 type LogEntry = {
   id: string
@@ -22,6 +23,7 @@ const ENDPOINTS = [
 ]
 
 function badgeColor(gateway: string) {
+  if (gateway.includes('cf-worker')) return 'bg-violet-500/15 text-violet-400 border-violet-500/20'
   if (gateway.includes('go-edge')) return 'bg-emerald-500/15 text-emerald-400 border-emerald-500/20'
   if (gateway.includes('fastapi')) return 'bg-sky-500/15 text-sky-400 border-sky-500/20'
   if (gateway.includes('fallback')) return 'bg-amber-500/15 text-amber-400 border-amber-500/20'
@@ -32,6 +34,7 @@ export default function Console() {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [busy, setBusy] = useState(false)
   const [auto, setAuto] = useState(false)
+  const [edgeDown, setEdgeDown] = useState(false)
   const intervalRef = useRef<number | null>(null)
 
   const probe = async (method: string, path: string) => {
@@ -39,7 +42,7 @@ export default function Console() {
     let status = 0
     let headers: Record<string, string> = {}
     try {
-      const res = await fetch(path, {
+      const res = await apiFetch(path, {
         method,
         headers: { Authorization: `Bearer ${localStorage.getItem('session_token') || ''}` },
       })
@@ -51,6 +54,7 @@ export default function Console() {
     }
     const latency = `${(performance.now() - t0).toFixed(0)}ms`
     const gateway = headers['x-gateway'] || 'unknown'
+    setEdgeDown(edgeStatus().edgeDown)
     const handler = headers['x-handler'] || headers['x-served-by'] || '-'
     const rt = headers['x-response-time'] || latency
     return {
@@ -108,6 +112,7 @@ export default function Console() {
     URL.revokeObjectURL(url)
   }
 
+  const cfCount = logs.filter((l) => l.gateway.includes('cf-worker')).length
   const goCount = logs.filter((l) => l.gateway.includes('go-edge')).length
   const pyCount = logs.filter((l) => l.gateway.includes('fastapi')).length
 
@@ -135,7 +140,12 @@ export default function Console() {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-4 gap-3">
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
+          <div className="text-xs text-zinc-500">CF Worker</div>
+          <div className="text-2xl font-semibold text-violet-400">{cfCount}</div>
+          <div className="text-xs text-zinc-600">edge-first {edgeDown && <span className="text-amber-400">• failover</span>}</div>
+        </div>
         <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-3">
           <div className="text-xs text-zinc-500">Go Edge</div>
           <div className="text-2xl font-semibold text-emerald-400">{goCount}</div>
@@ -226,7 +236,7 @@ export default function Console() {
                     </td>
                     <td className="px-2 py-1.5">
                       <span className={`inline-flex items-center rounded-full border px-2 py-px text-[10px] font-medium ${badgeColor(l.gateway)}`}>
-                        <span className={`size-1.5 rounded-full mr-1 ${l.gateway.includes('go-edge') ? 'bg-emerald-400' : l.gateway.includes('fastapi') ? 'bg-sky-400' : 'bg-zinc-500'}`} />
+                        <span className={`size-1.5 rounded-full mr-1 ${l.gateway.includes('cf-worker') ? 'bg-violet-400' : l.gateway.includes('go-edge') ? 'bg-emerald-400' : l.gateway.includes('fastapi') ? 'bg-sky-400' : 'bg-zinc-500'}`} />
                         {l.gateway}
                       </span>
                     </td>
@@ -242,7 +252,7 @@ export default function Console() {
 
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-3 text-xs leading-5 text-zinc-500">
         <div className="font-medium text-zinc-300 mb-1">วิธีดูจาก DevTools</div>
-        Open DevTools → Network → คลิก request → Headers → <code className="bg-zinc-800 px-1 py-px rounded">X-Gateway</code> จะเป็น <code className="bg-emerald-900/30 text-emerald-400 px-1 py-px rounded">go-edge</code> หรือ <code className="bg-sky-900/30 text-sky-400 px-1 py-px rounded">fastapi</code> และ <code className="bg-zinc-800 px-1 py-px rounded">X-Handler</code> บอก handler ย่อย เช่น <code className="bg-zinc-800 px-1 py-px rounded">chat-go / conversations-go / proxy-fallback / rate-limit</code> — Console นี้อ่าน header ให้เลย
+        Open DevTools → Network → คลิก request → Headers → <code className="bg-zinc-800 px-1 py-px rounded">X-Gateway</code> จะเป็น <code className="bg-violet-900/30 text-violet-400 px-1 py-px rounded">cf-worker</code>, <code className="bg-emerald-900/30 text-emerald-400 px-1 py-px rounded">go-edge</code> หรือ <code className="bg-sky-900/30 text-sky-400 px-1 py-px rounded">fastapi</code> และ <code className="bg-zinc-800 px-1 py-px rounded">X-Handler</code> บอก handler ย่อย เช่น <code className="bg-zinc-800 px-1 py-px rounded">chat-go / conversations-go / proxy-fallback / rate-limit</code> — Console นี้อ่าน header ให้เลย
       </div>
     </div>
   )
