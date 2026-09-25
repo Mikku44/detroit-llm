@@ -33,6 +33,8 @@ type cachedUsage struct {
 	ts      time.Time
 }
 
+const maxRequestBodyBytes = 5 << 20
+
 var imageOnlyModels = map[string]bool{
 	"z-image-turbo": true, "gpt-image-1": true, "dall-e-3": true, "gemini-2.0-flash-preview-image-generation": true, "glm-image": true, "cogview-4": true, "cogview-4-250304": true,
 	"grok-imagine-image": true, "grok-imagine-image-quality": true, "grok-2-image": true, "grok-image": true, "grok-imagine": true,
@@ -97,7 +99,7 @@ func isImageModel(model string) bool {
 
 func HandleChatCompletions(cfg config.Config, pool *pgxpool.Pool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		body, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		var req struct {
@@ -223,12 +225,12 @@ func checkTier(ctx context.Context, pool *pgxpool.Pool, userID string) error {
 		return fmt.Errorf("Membership required")
 	}
 	tierLimits := map[string][2]int64{
-		"nomad": {500000, 2170000},
-		"nomad_extra_claude": {90000, 360000},
-		"dreamer": {1000000, 4350000},
+		"nomad":                {500000, 2170000},
+		"nomad_extra_claude":   {90000, 360000},
+		"dreamer":              {1000000, 4350000},
 		"dreamer_extra_claude": {32000, 128000},
-		"entrepreneur": {3000000, 13040000},
-		"angel": {10000000, 43450000},
+		"entrepreneur":         {3000000, 13040000},
+		"angel":                {10000000, 43450000},
 	}
 	if lim, ok := tierLimits[tierID]; ok && tierID != "free" && tierID != "" {
 		d, w, m := getUsage(ctx, pool, userID)
@@ -356,7 +358,7 @@ func ensureImageGen(body []byte) []byte {
 
 func HandleWebChatCompletions(cfg config.Config) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+		r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 		body, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		var req struct {
@@ -372,7 +374,7 @@ func HandleWebChatCompletions(cfg config.Config) http.HandlerFunc {
 }
 
 func forwardToBackend(w http.ResponseWriter, r *http.Request, backendURL string) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	body, _ := io.ReadAll(r.Body)
 	r.Body = io.NopCloser(bytes.NewReader(body))
 	client := &http.Client{Timeout: 300 * time.Second}
@@ -394,5 +396,22 @@ func forwardToBackend(w http.ResponseWriter, r *http.Request, backendURL string)
 		}
 	}
 	w.WriteHeader(resp.StatusCode)
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream") {
+		if flusher, ok := w.(http.Flusher); ok {
+			buf := make([]byte, 32*1024)
+			for {
+				n, readErr := resp.Body.Read(buf)
+				if n > 0 {
+					if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+						return
+					}
+					flusher.Flush()
+				}
+				if readErr != nil {
+					return
+				}
+			}
+		}
+	}
 	io.Copy(w, resp.Body)
 }

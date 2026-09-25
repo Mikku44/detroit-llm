@@ -1,7 +1,8 @@
-// Edge-first API fetch with same-origin (VPS) fallback.
+// Same-origin Go Gateway by default, with optional Cloudflare edge-first mode.
 //
-// Primary: Cloudflare Worker (VITE_EDGE_URL). Fallback: '' = same origin,
-// served by Caddy on the VPS. Fallback triggers ONLY on:
+// Default: same origin -> Caddy -> Go Gateway/Python backend.
+// Optional: set VITE_API_MODE=cloudflare to use VITE_EDGE_URL first. In that
+// mode fallback triggers ONLY on:
 //   - network error / edge TTFB timeout (request likely never reached server)
 //   - 502 / 503 / 504 from edge (edge couldn't reach backend)
 // Never on 4xx/429: retrying a processed mutation (e.g. /stripe/*) could
@@ -10,9 +11,12 @@
 // Sticky-failover: after a hard edge failure, skip edge for EDGE_COOLDOWN_MS
 // so every call during an outage doesn't pay the timeout cost.
 
-export const EDGE_BASE =
-  (import.meta.env.VITE_EDGE_URL as string | undefined) ||
-  'https://detroit-go-gateway.arborrr.workers.dev'
+const API_MODE = ((import.meta.env.VITE_API_MODE as string | undefined) || 'go').trim().toLowerCase()
+
+export const EDGE_BASE = API_MODE === 'cloudflare'
+  ? ((import.meta.env.VITE_EDGE_URL as string | undefined)?.trim()
+    || 'https://detroit-go-gateway.arborrr.workers.dev')
+  : ''
 
 const EDGE_TTFB_MS = 8000
 const EDGE_COOLDOWN_MS = 30_000
@@ -57,6 +61,10 @@ async function fetchEdge(url: string, init: RequestInit): Promise<Response> {
 }
 
 export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  // The normal production path is same-origin, where Caddy routes API traffic
+  // through the Go Gateway. Do not retry the same request as a fallback.
+  if (!EDGE_BASE) return fetch(path, init)
+
   const edgeFirst = Date.now() >= edgeDownUntil
   const retryable = canRetryBody(init.body as BodyInit | null | undefined)
 

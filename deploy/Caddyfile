@@ -76,7 +76,7 @@
     }
 
     handle /api/web/* {
-        reverse_proxy backend:8000 {
+        reverse_proxy go-gateway:8080 {
             flush_interval -1
         }
     }

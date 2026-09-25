@@ -6,7 +6,10 @@
     "deploy": "wrangler deploy",
     "check": "wrangler deploy --dry-run --outdir dist"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@neondatabase/serverless": "^1.1.0",
+    "hono": "^4.13.9"
+  },
   "devDependencies": {
     "wrangler": "4.137.0"
   }
