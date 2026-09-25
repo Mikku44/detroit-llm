@@ -1,8 +1,5 @@
 # syntax=docker/dockerfile:1.4
-# Frontend is prebuilt on the host BEFORE docker build:
-#   cd dashboard && npm install && npm run build
-# (no node stage — avoids lightningcss musl + npm lock-drift issues).
-# ---- Backend runtime ----
+# Backend runtime only. The frontend is built and served by web.Dockerfile.
 FROM python:3.10-slim AS backend
 
 WORKDIR /app
@@ -11,8 +8,6 @@ COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY backend/ ./backend/
-# Prebuilt frontend (run `npm run build` in dashboard/ first).
-COPY dashboard/dist ./dashboard/dist
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
