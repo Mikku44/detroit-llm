@@ -72,6 +72,7 @@ const ALLOWED_CHAT_MODELS = new Set([
   'glm-5.3-flash',
   'glm-4.5-air',
   'glm-4.7-flashx',
+  'gpt-5-nano',
   // NOTE: muse-spark-* hidden for now
   // NOTE: claude-* hidden for now (set CLAUDE_ENABLED=true on the backend to restore)
   // 'claude-haiku-4-5',
@@ -136,6 +137,11 @@ const MODEL_META: Record<string, ModelMeta> = {
     name: 'GLM-4.7-FlashX',
     desc: 'Text + Image + Video — Z.AI high-speed reasoning',
     badges: ['text', 'image', 'video', 'reasoning'],
+  },
+  'gpt-5-nano': {
+    name: 'GPT-5 Nano',
+    desc: 'Text — fast, efficient OpenAI model via OpenRouter',
+    badges: ['text', 'fast'],
   },
   'muse-spark-1.3': {
     name: 'Muse Spark 1.3',
@@ -220,6 +226,7 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
   'glm-5.3-flash': 1000000,
   'glm-4.5-air': 1000000,
   'glm-4.7-flashx': 1000000,
+  'gpt-5-nano': 400000,
   'muse-spark-1.3': 1048576,
   'muse-spark-1.3-contributor': 1048576,
   'muse-spark-1.2': 1048576,
@@ -235,6 +242,16 @@ const MODEL_CONTEXT_LIMITS: Record<string, number> = {
 
 const DEFAULT_CONTEXT_LIMIT = 1000000
 const COMPACT_THRESHOLD = 0.85 // auto-compact when usage >= 85%
+
+const FREE_TIER_CHAT_MODELS = new Set([
+  'deepseek-v4-flash',
+  'qwen3.7-flash',
+  'qwen3.8-flash',
+  'gemini-2.5-flash',
+  'glm-4.5-air',
+  'glm-4.7-flashx',
+  'gpt-5-nano',
+])
 
 // Anti-hang protection for streaming responses.
 const STREAM_MAX_MS = 300 * 1000 // hard cap: 5 minutes total
@@ -834,7 +851,7 @@ export default function Chat3() {
       setAttachError(!sessionToken ? 'Log in to start chatting.' : 'No model is available right now.')
       return
     }
-    const requestModel = freeTier && !model.includes('flash') ? 'deepseek-v4-flash' : model
+    const requestModel = freeTier && !FREE_TIER_CHAT_MODELS.has(model) ? 'deepseek-v4-flash' : model
     const doImageGen = imageGen || ['z-image-turbo', 'glm-image', 'grok-imagine-image'].includes(requestModel)
     // ถามก่อนใช้ tool ที่เปิดเองแบบ explicit เท่านั้น
     // ส่วนว่าข้อความคลุมเครือไหม / ต้องถามเพิ่มไหม -> ให้ model ตัดสินใจเอง
